@@ -1,0 +1,30 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.backup
+
+
+# Variable files
+*.tfvars
+terraform.tfvars
+
+# Logs
+*.log
+crash.log
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docs
+*.docx
+*.pdf
+
