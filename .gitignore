@@ -1,8 +1,12 @@
 # Terraform
 **/.terraform/*
+.terraform/
 *.tfstate
+*.tfstate.*
 *.tfstate.backup
 
+# Terraform lock file
+.terraform.lock.hcl
 
 # Variable files
 *.tfvars
@@ -19,6 +23,9 @@ __pycache__/
 # IDE / Editor
 .vscode/
 .idea/
+
+# Lamda Artifact
+*.zip
 
 # OS files
 .DS_Store
