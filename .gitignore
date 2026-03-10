@@ -5,9 +5,6 @@
 *.tfstate.*
 *.tfstate.backup
 
-# Terraform lock file
-.terraform.lock.hcl
-
 # Variable files
 *.tfvars
 terraform.tfvars
