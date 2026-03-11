@@ -22,7 +22,7 @@ __pycache__/
 .idea/
 
 # Lamda Artifact
-*.zip
+**/*.zip
 
 # OS files
 .DS_Store
