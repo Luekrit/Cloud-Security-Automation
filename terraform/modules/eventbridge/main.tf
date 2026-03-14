@@ -20,7 +20,7 @@ resource "aws_cloudwatch_event_rule" "this" {
 
 resource "aws_cloudwatch_event_target" "lambda" {
   rule      = aws_cloudwatch_event_rule.this.name
-  target_id = "InvokeRemediationLambda"
+  target_id = var.target_id
   arn       = var.lambda_function_arn
 }
 
