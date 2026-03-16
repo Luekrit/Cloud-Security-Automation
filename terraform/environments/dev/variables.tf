@@ -1,28 +1,31 @@
+variable "aws_region" {
+  description = "AWS region for this environment"
+  type        = string
+}
+
+variable "aws_profile" {
+  description = "AWS CLI profile used by Terraform"
+  type        = string
+}
+
 variable "project_name" {
   description = "Project name"
   type        = string
 }
 
-variable "aws_region" {
-  description = "AWS region for deployment"
-  type        = string
-}
 variable "environment" {
-  description = "Deployment environment"
+  description = "Environment name"
   type        = string
 }
 
 variable "event_names" {
-  description = "IAM API event names that should trigger remediation"
+  description = "CloudTrail event names that EventBridge should match"
   type        = list(string)
-
   default = [
     "AttachUserPolicy",
     "AttachRolePolicy",
     "PutUserPolicy",
     "PutRolePolicy",
-    "CreateAccessKey",
-    "UpdateAssumeRolePolicy",
-    "PassRole"
+    "CreatePolicyVersion"
   ]
 }

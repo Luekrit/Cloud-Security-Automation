@@ -19,7 +19,7 @@ module "lambda" {
 
   project_name       = var.project_name
   environment        = var.environment
-  lambda_role_arn    = module.iam.lambda_role_arn
+  lambda_role_arn    = module.iam.lambda_execution_role_arn
   lambda_source_path = "../../../lambda/src/remediate.py"
   tags               = local.common_tags
 }
