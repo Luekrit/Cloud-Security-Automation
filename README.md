@@ -120,7 +120,29 @@ Infrastructure is deployed using **Terraform with secure best practices**.
 
 ---
 ## Infrastructure Design
+```mermaid
+graph TD
+    %% Define Styles
+    classDef tool fill:#742fba,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef iam fill:#f6a800,stroke:#333,stroke-width:2px;
+    classDef aws fill:#232f3e,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef storage fill:#3b48cc,stroke:#fff,stroke-width:2px,color:#fff;
 
+    A[<b>Terraform CLI</b><br/>Local Machine / CI/CD]:::tool -->|sts:AssumeRole| B[<b>TerraformExecutionRole</b><br/>IAM Role]:::iam
+    
+    B -->|Provision Resources| C[<b>AWS Infrastructure</b><br/>VPC, Lambda, EventBridge]:::aws
+    
+    subgraph Remote_Backend [Remote State Management]
+        D[<b>S3 Bucket</b><br/>Remote State Storage]:::storage
+        E[<b>DynamoDB Table</b><br/>State Locking]:::storage
+        
+        D ---|Stores| F(<b>terraform.tfstate</b>):::storage
+        E ---|Prevents| G(<b>Concurrent Runs</b>):::storage
+    end
+
+    C -.->|Update State| D
+    A <-->|Check/Update Lock| E
+```
 
 ---
 
