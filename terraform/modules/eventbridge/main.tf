@@ -7,8 +7,8 @@ resource "aws_cloudwatch_event_rule" "this" {
   description = var.rule_description
 
   event_pattern = jsonencode({
-    source      = ["aws.iam"]
-    detail-type = ["AWS API Call via CloudTrail"]
+    source = ["aws.iam"]
+    "detail-type" = ["AWS API Call via CloudTrail"]
     detail = {
       eventSource = ["iam.amazonaws.com"]
       eventName   = var.event_names

@@ -36,13 +36,7 @@ variable "event_names" {
   type        = list(string)
 
   default = [
-    "AttachUserPolicy",
-    "AttachRolePolicy",
-    "PutUserPolicy",
-    "PutRolePolicy",
-    "CreateAccessKey",
-    "UpdateAssumeRolePolicy",
-    "PassRole"
+    "AttachUserPolicy"
   ]
 
   validation {
