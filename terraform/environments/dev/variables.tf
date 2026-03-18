@@ -21,11 +21,8 @@ variable "environment" {
 variable "event_names" {
   description = "CloudTrail event names that EventBridge should match"
   type        = list(string)
+
   default = [
-    "AttachUserPolicy",
-    "AttachRolePolicy",
-    "PutUserPolicy",
-    "PutRolePolicy",
-    "CreatePolicyVersion"
+    "AttachUserPolicy"
   ]
 }
