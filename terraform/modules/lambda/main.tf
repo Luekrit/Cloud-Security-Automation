@@ -7,15 +7,20 @@ data "archive_file" "lambda_zip" {
 resource "aws_lambda_function" "remediation_lambda" {
   function_name = "${var.project_name}-${var.environment}-remediation"
 
-  runtime = "python3.11"
+  role    = var.lambda_role_arn
   handler = "remediate.lambda_handler"
+  runtime = "python3.12"
 
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 
-  role = var.lambda_role_arn
-
   timeout = 30
+
+  environment {
+    variables = {
+      DRY_RUN = "true"
+    }
+  }
 
   tags = var.tags
 }
