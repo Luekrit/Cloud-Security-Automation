@@ -1,3 +1,10 @@
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
 locals {
   rule_name = "${var.project_name}-${var.environment}-${var.rule_name_suffix}"
 }
@@ -7,7 +14,6 @@ resource "aws_cloudwatch_event_rule" "this" {
   description = var.rule_description
 
   event_pattern = jsonencode({
-    source = ["aws.iam"]
     "detail-type" = ["AWS API Call via CloudTrail"]
     detail = {
       eventSource = ["iam.amazonaws.com"]

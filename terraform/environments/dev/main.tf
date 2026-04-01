@@ -40,16 +40,48 @@ module "cloudtrail" {
   tags           = local.common_tags
 }
 
+# Existing Sydney EventBridge rule
+# You can keep this for now or remove it later after us-east-1 is confirmed working.
 module "eventbridge" {
   source = "../../modules/eventbridge"
 
   project_name        = var.project_name
   environment         = var.environment
   lambda_function_arn = module.lambda.lambda_function_arn
+  event_names         = var.event_names
+  tags                = local.common_tags
+}
+
+# New us-east-1 Lambda for real IAM global event detection
+module "lambda_global" {
+  source = "../../modules/lambda"
+
+  providers = {
+    aws = aws.global
+  }
+
+  project_name       = "${var.project_name}-global"
+  environment        = var.environment
+  lambda_role_arn    = module.iam.lambda_execution_role_arn
+  lambda_source_path = "../../../lambda/src/remediate.py"
+  tags               = merge(local.common_tags, { RegionScope = "global-us-east-1" })
+}
+
+# New us-east-1 EventBridge rule for real IAM events
+module "eventbridge_global" {
+  source = "../../modules/eventbridge"
+
+  providers = {
+    aws = aws.global
+  }
+
+  project_name        = "${var.project_name}-global"
+  environment         = var.environment
+  lambda_function_arn = module.lambda_global.lambda_function_arn
 
   event_names = [
     "AttachUserPolicy"
   ]
 
-  tags = local.common_tags
+  tags = merge(local.common_tags, { RegionScope = "global-us-east-1" })
 }
