@@ -26,16 +26,22 @@ SUPPORTED_EVENTS = {
     "AttachUserPolicy",
 }
 
+
 def log_json(level: str, message: str, **kwargs: Any) -> None:
-    payload = {"message": message, **kwargs}
-    line = json.dumps(payload, default=str)
+    payload = {
+        "message": message,
+        **kwargs,
+    }
+
+    log_line = json.dumps(payload, default=str)
 
     if level.upper() == "ERROR":
-        logger.error(line)
+        logger.error(log_line)
     elif level.upper() == "WARNING":
-        logger.warning(line)
+        logger.warning(log_line)
     else:
-        logger.info(line)
+        logger.info(log_line)
+
 
 def get_nested(data: Dict[str, Any], path: list, default: Any = None) -> Any:
     current = data
@@ -47,8 +53,21 @@ def get_nested(data: Dict[str, Any], path: list, default: Any = None) -> Any:
             return default
     return current
 
+
+def extract_username_from_arn(arn: Optional[str]) -> Optional[str]:
+    if not arn:
+        return None
+
+    parts = arn.split("/")
+    if len(parts) < 2:
+        return None
+
+    return parts[-1]
+
+
 def parse_cloudtrail_event(event: Dict[str, Any]) -> Dict[str, Optional[str]]:
     detail = event.get("detail", {})
+
     return {
         "event_name": detail.get("eventName"),
         "event_source": detail.get("eventSource"),
@@ -61,11 +80,13 @@ def parse_cloudtrail_event(event: Dict[str, Any]) -> Dict[str, Optional[str]]:
         "policy_arn": get_nested(detail, ["requestParameters", "policyArn"]),
     }
 
+
 def should_remediate(parsed: Dict[str, Optional[str]]) -> Tuple[bool, str]:
     event_name = parsed.get("event_name")
     target_user_name = parsed.get("target_user_name")
     policy_arn = parsed.get("policy_arn")
     actor_arn = parsed.get("actor_arn")
+    actor_name = extract_username_from_arn(actor_arn)
 
     if event_name not in SUPPORTED_EVENTS:
         return False, f"Unsupported event: {event_name}"
@@ -79,6 +100,9 @@ def should_remediate(parsed: Dict[str, Optional[str]]) -> Tuple[bool, str]:
     if target_user_name in PROTECTED_USERS:
         return False, f"Target user is protected: {target_user_name}"
 
+    if actor_name and target_user_name == actor_name:
+        return False, "Actor and target user are the same"
+
     if not policy_arn:
         return False, "Missing policy ARN"
 
@@ -87,9 +111,13 @@ def should_remediate(parsed: Dict[str, Optional[str]]) -> Tuple[bool, str]:
 
     return True, "Approved for remediation"
 
+
 def detach_user_policy(user_name: str, policy_arn: str) -> Dict[str, Any]:
     try:
-        iam.detach_user_policy(UserName=user_name, PolicyArn=policy_arn)
+        iam.detach_user_policy(
+            UserName=user_name,
+            PolicyArn=policy_arn,
+        )
         return {
             "status": "success",
             "action": "detach_user_policy",
@@ -105,6 +133,7 @@ def detach_user_policy(user_name: str, policy_arn: str) -> Dict[str, Any]:
             "error": str(exc),
         }
 
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     log_json(
         "INFO",
@@ -116,11 +145,22 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
     try:
         parsed = parse_cloudtrail_event(event)
-        log_json("INFO", "Parsed event", parsed_event=parsed)
+
+        log_json(
+            "INFO",
+            "Parsed event",
+            parsed_event=parsed,
+        )
 
         approved, reason = should_remediate(parsed)
+
         if not approved:
-            log_json("INFO", "No remediation performed", reason=reason, parsed_event=parsed)
+            log_json(
+                "INFO",
+                "No remediation performed",
+                reason=reason,
+                parsed_event=parsed,
+            )
             return {
                 "statusCode": 200,
                 "body": json.dumps({
@@ -138,7 +178,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 "user_name": parsed["target_user_name"],
                 "policy_arn": parsed["policy_arn"],
             }
-            log_json("INFO", "Dry run enabled - remediation skipped", remediation_result=simulated)
+            log_json(
+                "INFO",
+                "Dry run enabled - remediation skipped",
+                remediation_result=simulated,
+                parsed_event=parsed,
+            )
             return {
                 "statusCode": 200,
                 "body": json.dumps({
@@ -155,7 +200,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         )
 
         if result["status"] == "success":
-            log_json("INFO", "Remediation completed", remediation_result=result)
+            log_json(
+                "INFO",
+                "Remediation completed",
+                remediation_result=result,
+                parsed_event=parsed,
+            )
             return {
                 "statusCode": 200,
                 "body": json.dumps({
@@ -166,7 +216,12 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                 }),
             }
 
-        log_json("ERROR", "Remediation failed", remediation_result=result)
+        log_json(
+            "ERROR",
+            "Remediation failed",
+            remediation_result=result,
+            parsed_event=parsed,
+        )
         return {
             "statusCode": 500,
             "body": json.dumps({
@@ -178,7 +233,11 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         }
 
     except Exception as exc:
-        log_json("ERROR", "Unhandled Lambda exception", error=str(exc))
+        log_json(
+            "ERROR",
+            "Unhandled Lambda exception",
+            error=str(exc),
+        )
         return {
             "statusCode": 500,
             "body": json.dumps({
