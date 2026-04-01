@@ -62,14 +62,29 @@ def parse_cloudtrail_event(event: Dict[str, Any]) -> Dict[str, Optional[str]]:
     }
 
 def should_remediate(parsed: Dict[str, Optional[str]]) -> Tuple[bool, str]:
-    if parsed.get("event_name") not in SUPPORTED_EVENTS:
-        return False, f"Unsupported event: {parsed.get('event_name')}"
-    if not parsed.get("target_user_name"):
+    event_name = parsed.get("event_name")
+    target_user_name = parsed.get("target_user_name")
+    policy_arn = parsed.get("policy_arn")
+    actor_arn = parsed.get("actor_arn")
+
+    if event_name not in SUPPORTED_EVENTS:
+        return False, f"Unsupported event: {event_name}"
+
+    if not actor_arn:
+        return False, "Missing actor ARN"
+
+    if not target_user_name:
         return False, "Missing target user name"
-    if not parsed.get("policy_arn"):
+
+    if target_user_name in PROTECTED_USERS:
+        return False, f"Target user is protected: {target_user_name}"
+
+    if not policy_arn:
         return False, "Missing policy ARN"
-    if parsed.get("policy_arn") not in DANGEROUS_POLICIES:
-        return False, f"Policy not in remediation scope: {parsed.get('policy_arn')}"
+
+    if policy_arn not in DANGEROUS_POLICIES:
+        return False, f"Policy not in remediation scope: {policy_arn}"
+
     return True, "Approved for remediation"
 
 def detach_user_policy(user_name: str, policy_arn: str) -> Dict[str, Any]:
