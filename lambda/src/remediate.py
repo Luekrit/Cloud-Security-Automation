@@ -13,6 +13,11 @@ iam = boto3.client("iam")
 
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 
+PROTECTED_USERS = {
+    "SecurityteamAdmin",
+    "terraform-operator",
+}
+
 DANGEROUS_POLICIES = {
     "arn:aws:iam::aws:policy/AdministratorAccess",
 }
