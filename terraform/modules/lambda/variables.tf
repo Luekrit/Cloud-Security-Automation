@@ -23,3 +23,13 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "dry_run" {
+  type    = bool
+  default = true
+}
+
+variable "environment_variables" {
+  type    = map(string)
+  default = {}
+}

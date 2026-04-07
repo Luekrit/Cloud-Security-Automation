@@ -27,11 +27,13 @@ resource "aws_lambda_function" "remediation_lambda" {
 
   timeout = 30
 
-  environment {
-    variables = {
-      DRY_RUN = "true"
-    }
-  }
-
-  tags = var.tags
+environment {
+  variables = merge(
+    {
+      DRY_RUN = tostring(var.dry_run)
+    },
+    var.environment_variables
+  )
+}
+tags = var.tags
 }

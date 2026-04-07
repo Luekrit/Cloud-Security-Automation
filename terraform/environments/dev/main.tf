@@ -63,8 +63,12 @@ module "lambda_global" {
   project_name       = "${var.project_name}-global"
   environment        = var.environment
   lambda_role_arn    = module.iam.lambda_execution_role_arn
-  SNS_TOPIC_ARN = module.sns_global.topic_arn
   lambda_source_path = "../../../lambda/src/remediate.py"
+
+  environment_variables = {
+  SNS_TOPIC_ARN = module.sns_global.topic_arn
+}
+
   tags               = merge(local.common_tags, { RegionScope = "global-us-east-1" })
 }
 
