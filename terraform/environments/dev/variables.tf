@@ -26,3 +26,8 @@ variable "event_names" {
     "AttachUserPolicy"
   ]
 }
+
+variable "alert_email" {
+  description = "Email address for security alerts"
+  type        = string
+}
