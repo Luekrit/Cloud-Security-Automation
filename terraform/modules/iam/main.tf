@@ -28,15 +28,27 @@ resource "aws_iam_role_policy" "lambda_remediation_policy" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowDetachUserPolicy"
-        Effect = "Allow"
-        Action = [
-          "iam:DetachUserPolicy"
-        ]
-        Resource = "*"
-      }
-    ]
+    Statement = concat(
+      [
+        {
+          Sid    = "AllowDetachUserPolicy"
+          Effect = "Allow"
+          Action = [
+            "iam:DetachUserPolicy"
+          ]
+          Resource = "*"
+        }
+      ],
+      var.sns_topic_arn != "" ? [
+        {
+          Sid    = "AllowPublishToSns"
+          Effect = "Allow"
+          Action = [
+            "sns:Publish"
+          ]
+          Resource = var.sns_topic_arn
+        }
+      ] : []
+    )
   })
 }
