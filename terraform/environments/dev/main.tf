@@ -9,9 +9,10 @@ locals {
 module "iam" {
   source = "../../modules/iam"
 
-  project_name = var.project_name
-  environment  = var.environment
-  tags         = local.common_tags
+  project_name  = var.project_name
+  environment   = var.environment
+  sns_topic_arn = module.sns_global.topic_arn
+  tags          = local.common_tags
 }
 
 module "lambda" {
