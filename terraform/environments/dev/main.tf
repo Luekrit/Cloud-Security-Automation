@@ -85,3 +85,17 @@ module "eventbridge_global" {
 
   tags = merge(local.common_tags, { RegionScope = "global-us-east-1" })
 }
+
+module "sns_global" {
+  source = "../../modules/sns"
+
+  providers = {
+    aws = aws.global
+  }
+
+  project_name      = var.project_name
+  environment       = "${var.environment}-global"
+  topic_name_suffix = "security-alerts"
+  email_endpoint    = var.alert_email
+  tags              = local.common_tags
+}
