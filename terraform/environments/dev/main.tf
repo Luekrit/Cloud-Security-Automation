@@ -66,10 +66,10 @@ module "lambda_global" {
   lambda_source_path = "../../../lambda/src/remediate.py"
 
   environment_variables = {
-  SNS_TOPIC_ARN = module.sns_global.topic_arn
-}
+    SNS_TOPIC_ARN = module.sns_global.topic_arn
+  }
 
-  tags               = merge(local.common_tags, { RegionScope = "global-us-east-1" })
+  tags = merge(local.common_tags, { RegionScope = "global-us-east-1" })
 }
 
 # New us-east-1 EventBridge rule for real IAM events
