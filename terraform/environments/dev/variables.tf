@@ -28,6 +28,6 @@ variable "event_names" {
 }
 
 variable "alert_email" {
-  description = "Email address for security alerts"
+  description = "novemberluekrit2537@outlook.com"
   type        = string
 }

@@ -1,3 +1,11 @@
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
 resource "aws_iam_role" "lambda_execution_role" {
   name = "${var.project_name}-${var.environment}-lambda-role"
 
