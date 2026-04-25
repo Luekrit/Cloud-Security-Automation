@@ -175,7 +175,8 @@ This project applies core cloud security engineering practices:
 - AWS CloudTrail  
 - Amazon EventBridge  
 - AWS Lambda  
-- Amazon CloudWatch Logs  
+- Amazon CloudWatch Logs
+- SNS  
 - Python  
 
 ---
