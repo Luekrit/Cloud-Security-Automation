@@ -1,23 +1,27 @@
-# Self-Healing Cloud Security Automation
+# Cloud Security Automation & Remediation
 
-**AWS | Terraform | IAM | EventBridge | Lambda | CloudTrail**
+**AWS | Terraform | IAM | EventBridge | Lambda | CloudTrail | SNS | Python**
 
-A cloud security engineering project demonstrating **event-driven security detection and automated remediation** using Terraform and AWS native services.
+A cloud security engineering project demonstrating **event-driven detection, alerting, and governance-aware remediation decision logic** using Terraform and AWS native services.
 
-This project simulates how modern cloud environments detect IAM privilege escalation events and automatically restore **least-privilege access** without manual intervention.
+This project simulates how modern cloud environments detect risky IAM privilege escalation activity, notify security teams, evaluate approved exceptions, and support safe remediation through a **dry-run-first** approach.
 
 ---
 
 # Project Overview
 
-This project implements a **self-healing cloud security architecture** that detects and remediates unauthorized IAM policy changes in real time.
+This project implements a **self-healing cloud security architecture** that detects high-risk IAM policy attachment activity in near real time.
 
 Instead of relying on manual incident response, the system:
 
-- Monitors AWS API activity using CloudTrail  
-- Detects security-relevant events using EventBridge  
-- Triggers automated remediation using Lambda  
-- Restores the environment to a secure baseline  
+- Monitors AWS API activity using CloudTrail
+- Detects security-relevant events using EventBridge
+- Triggers response logic using Lambda
+- Sends security alerts using SNS email
+- Evaluates governance-aware exceptions using IAM tags
+- Supports automated remediation in a controlled manner
+
+The current implementation focuses on **AdministratorAccess attachment detection** for IAM users and validates the control through **dry-run testing** before enabling real enforcement.
 
 ---
 
