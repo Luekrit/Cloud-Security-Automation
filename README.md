@@ -25,14 +25,13 @@ Instead of relying on manual incident response, the system:
 
 ```mermaid
 graph TD
-    %% Define Styles
     classDef trigger fill:#ed2c13,stroke:#333,stroke-width:2px;
     classDef logic fill:#326ee6,stroke:#333,stroke-width:2px;
     classDef action fill:#d4772a,stroke:#333,stroke-width:2px;
     classDef final fill:#7330e6,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5;
 
     subgraph Detection_Layer [1. Detection]
-        A[<b>IAM / Security Events</b><br/>AttachUserPolicy, CreateAccessKey, etc.]:::trigger --> B[<b>AWS CloudTrail</b><br/>Records API Activity]
+        A[<b>IAM / Security Events</b><br/>AttachUserPolicy]:::trigger --> B[<b>AWS CloudTrail</b><br/>Records API Activity]
     end
 
     subgraph Routing_Layer [2. Filtering]
@@ -42,18 +41,21 @@ graph TD
     subgraph Logic_Layer [3. Logic Engine]
         C --> D[<b>AWS Lambda</b><br/><i>remediate.py</i>]:::logic
         D --> D1[Parse Event Metadata]
-        D --> D2[Evaluate Risk & Policy]
-        D --> D3[Trigger Remediation]
+        D --> D2[Evaluate Risk]
+        D --> D3[Check Governance Exceptions]
+        D --> D4[Decide Remediate or Skip]
     end
 
-    subgraph Execution_Layer [4. Automated Response]
-        D3 --> E[<b>IAM Remediation</b><br/>Detach Policy / Delete Key]:::action
-        D3 --> F[<b>Security Logging</b><br/>CloudWatch Logs Audit Trail]:::action
+    subgraph Response_Layer [4. Response]
+        D4 --> E[<b>SNS Email Alert</b><br/>Structured Security Notification]:::action
+        D4 --> F[<b>CloudWatch Logs</b><br/>Audit Trail and Debugging]:::action
+        D4 --> G[<b>IAM Remediation</b><br/>Detach Policy in Enforcement Mode]:::action
     end
 
     subgraph Outcome [5. Desired State]
-        E --> G[<b>Secure Cloud Baseline</b><br/>Least Privilege Restored]:::final
-        F --> G
+        G --> H[<b>Least Privilege Preserved</b>]:::final
+        E --> H
+        F --> H
     end
 ```
 ---
@@ -64,27 +66,57 @@ graph TD
 
 ## Event-Driven Threat Detection
 
-The system monitors IAM-related API activity such as:
+The system currently monitors IAM-related API activity, with the main validated use case focused on:
 
 - AttachRolePolicy  
-- PutUserPolicy  
-- CreatePolicy  
-- Privilege escalation attempts  
 
-EventBridge filters these events in real time and triggers remediation workflows.
+EventBridge filters matching CloudTrail events in real time and invokes the Lambda response workflow.
 
 ---
 
-## Automated Privilege Remediation
+## Governance-Aware Response Logic
 
-The Lambda remediation engine:
+The Lambda response engine:
 
-- Parses incoming security events  
-- Identifies unauthorized privilege changes  
-- Removes overly permissive policies (e.g., `AdministratorAccess`)  
-- Restores secure IAM configurations  
+- Parses incoming CloudTrail event metadata
+- Identifies targeted IAM users and risky policy attachments
+- Evaluates whether remediation is in scope
+- Checks approved exception tags such as:
+  - `SecurityApproved=true`
+- Decides whether to remediate or skip
 
-This creates a **self-healing identity security model**.
+This creates a more realistic security control by combining technical detection with **governance-aware exception handling**.
+
+---
+
+## SNS Alerting
+
+When a risky IAM event is detected, the system sends a structured SNS email alert containing:
+
+- Event name
+- Actor ARN
+- Target user
+- Policy ARN
+- Dry-run status
+- Remediation decision
+- Reason for approval or skip
+
+This improves operational visibility before full enforcement is enabled.
+
+---
+
+## Dry-Run Safety Mode
+
+The control currently operates in **dry-run mode**.
+
+This means:
+
+- Risky activity is still detected
+- Alerts are still sent
+- Decisions are still logged
+- but no actual IAM detachment is performed yet
+
+This allows safe validation before enabling live remediation.
 
 ---
 
@@ -98,7 +130,8 @@ This provides:
 
 - Audit trail for security actions  
 - Debugging capability  
-- Operational visibility  
+- Operational visibility
+- Evidence for validation and testing
 
 ---
 
@@ -108,10 +141,12 @@ To validate the system, the following scenario is tested:
 
 1. A user or role is granted the **AdministratorAccess** policy  
 2. CloudTrail records the IAM policy change  
-3. EventBridge detects the security event  
-4. Lambda executes remediation  
-5. AdministratorAccess policy is removed  
-6. The environment returns to a **least-privilege state**
+3. EventBridge detects the matching event  
+4. Lambda evaluates the event
+5. SNS sends a structured security alert  
+6. Lambda either:  
+    - approves remediation in dry-run mode, or
+    - skips remediation if an approved exception tag is present
 
 ---
 # Terraform Infrastructure
@@ -152,9 +187,111 @@ graph TD
 - Secure access using **AssumeRole (no long-term credentials)**  
 - Remote state storage in **S3**  
 - State locking using **DynamoDB**  
-- Reusable modules for IAM, Lambda, and EventBridge  
+- Reusable modules for IAM, Lambda, EventBridge, SNS, CloudTrail, and S3
+- Separate global path in us-east-1 for IAM event handling
 
 ---
+
+# Validation Results
+
+This phase validated the end-to-end detection, alerting, and governance-aware exception handling of the project in **dry-run mode**.
+
+## Test Scenario A — Unapproved AdministratorAccess attachment
+
+**Objective:** Confirm that the control detects a high-risk IAM policy attachment, sends an alert, and approves remediation when no exception applies.
+
+**Test action**
+- Attached `AdministratorAccess` to `iam-test-user`
+
+**Expected behavior**
+- CloudTrail records the IAM API event
+- EventBridge matches the event
+- Lambda is invoked in `us-east-1`
+- SNS email alert is sent
+- Remediation is approved
+- Because `DRY_RUN=true`, no actual detach occurs
+
+**Observed result**
+- Lambda logs showed:
+  - `Security detection triggered`
+  - `Parsed event`
+  - `SNS alert processed`
+  - `Dry run enabled - remediation skipped`
+- SNS email alert showed:
+  - `approved_for_remediation: true`
+  - `decision_reason: "Approved for remediation"`
+
+**Evidence**
+
+**Figure 1. Test A — CloudWatch log showing detection, SNS alerting, and dry-run remediation approval**  
+![Test A CloudWatch Logs](screenshots/test-a-cloudwatch.png)
+
+**Figure 2. Test A — SNS email alert showing remediation approved**  
+![Test A SNS Email Alert](screenshots/test-a-email.png)
+
+**Outcome**
+- Detection worked
+- Alerting worked
+- Remediation decision logic worked
+- Dry-run safety control worked
+
+---
+
+## Test Scenario B — Approved exception using IAM tag
+
+**Objective:** Confirm that the control still detects and alerts on the risky IAM event, but skips remediation when the target user has an approved exception tag.
+
+**Test action**
+- Added IAM user tag:
+  - `SecurityApproved = true`
+- Attached `AdministratorAccess` to `iam-test-user`
+
+**Expected behavior**
+- CloudTrail records the IAM API event
+- EventBridge matches the event
+- Lambda is invoked in `us-east-1`
+- SNS email alert is sent
+- Remediation is **not** approved because the target user has an approved exception tag
+- Lambda logs the skip reason clearly
+
+**Observed result**
+- Lambda logs showed:
+  - `Security detection triggered`
+  - `Parsed event`
+  - `SNS alert processed`
+  - `No remediation performed`
+- SNS email alert showed:
+  - `approved_for_remediation: false`
+  - `decision_reason: "User has approved exception tag: SecurityApproved=true"`
+
+**Evidence**
+
+**Figure 3. Test B — CloudWatch log showing alerting and exception-based remediation skip**  
+![Test B CloudWatch Logs](screenshots/test-b-cloudwatch.png)
+
+**Figure 4. Test B — SNS email alert showing approved exception decision**  
+![Test B SNS Email Alert](screenshots/test-b-email.png)
+
+**Outcome**
+- Detection worked
+- Alerting worked
+- Governance-aware exception handling worked
+- Approved exceptions were skipped correctly
+
+---
+
+## Validation Summary
+
+These tests confirmed that the control can:
+
+- detect risky IAM policy attachment events
+- alert security teams through SNS email
+- support safe rollout using dry-run mode
+- apply governance-aware exception handling using IAM user tags
+
+This phase demonstrates a more realistic security engineering workflow:
+
+**CloudTrail → EventBridge → Lambda → SNS alert → Dry-run remediation decision**
 
 # Security Principles Demonstrated
 
@@ -176,7 +313,7 @@ This project applies core cloud security engineering practices:
 - Amazon EventBridge  
 - AWS Lambda  
 - Amazon CloudWatch Logs
-- SNS  
+- Amazon SNS  
 - Python  
 
 ---
