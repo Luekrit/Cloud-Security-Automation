@@ -224,10 +224,10 @@ This phase validated the end-to-end detection, alerting, and governance-aware ex
 **Evidence**
 
 **Figure 1. Test A — CloudWatch log showing detection, SNS alerting, and dry-run remediation approval**  
-![Test A CloudWatch Logs](screenshots/test-a-cloudwatch.png)
+![Test A CloudWatch Logs](https://github.com/Luekrit/Cloud-Security-Automation/blob/5a6adbb0da548bb17a2074b219dda3021f854f92/diagrams/Screenshot%20test%20A%20log%20Event.png)
 
 **Figure 2. Test A — SNS email alert showing remediation approved**  
-![Test A SNS Email Alert](screenshots/test-a-email.png)
+![Test A SNS Email Alert](https://github.com/Luekrit/Cloud-Security-Automation/blob/main/diagrams/Screenshot%20SNS%20notifications%20for%20Test%20A.png)
 
 **Outcome**
 - Detection worked
@@ -267,10 +267,10 @@ This phase validated the end-to-end detection, alerting, and governance-aware ex
 **Evidence**
 
 **Figure 3. Test B — CloudWatch log showing alerting and exception-based remediation skip**  
-![Test B CloudWatch Logs](screenshots/test-b-cloudwatch.png)
+![[Test B CloudWatch Logs](screenshots/test-b-cloudwatch.png)](https://github.com/Luekrit/Cloud-Security-Automation/blob/main/diagrams/Screenshot%20Log%20Event%20for%20Test%20B.png)
 
 **Figure 4. Test B — SNS email alert showing approved exception decision**  
-![Test B SNS Email Alert](screenshots/test-b-email.png)
+![[Test B SNS Email Alert](screenshots/test-b-email.png)](https://github.com/Luekrit/Cloud-Security-Automation/blob/main/diagrams/Screenshot%20SNS%20notification%20for%20test%20B.png)
 
 **Outcome**
 - Detection worked
