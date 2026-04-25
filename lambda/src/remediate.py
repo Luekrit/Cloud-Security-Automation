@@ -20,6 +20,7 @@ EXCEPTION_TAG_VALUE = os.getenv("EXCEPTION_TAG_VALUE", "true")
 PROTECTED_USERS = {
     "SecurityteamAdmin",
     "terraform-operator",
+    "DevOps-IAM-Admin"
 }
 
 DANGEROUS_POLICIES = {

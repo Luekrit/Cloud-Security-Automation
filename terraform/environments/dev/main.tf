@@ -67,7 +67,7 @@ module "lambda_global" {
   lambda_source_path = "../../../lambda/src/remediate.py"
 
   environment_variables = {
-    SNS_TOPIC_ARN = module.sns_global.topic_arn
+    SNS_TOPIC_ARN       = module.sns_global.topic_arn
     EXCEPTION_TAG_KEY   = "SecurityApproved"
     EXCEPTION_TAG_VALUE = "true"
   }
