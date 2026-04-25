@@ -39,10 +39,12 @@ resource "aws_iam_role_policy" "lambda_remediation_policy" {
     Statement = concat(
       [
         {
-          Sid    = "AllowDetachUserPolicy"
+          Sid    = "AllowIamReadAndDetachUserPolicy"
           Effect = "Allow"
           Action = [
-            "iam:DetachUserPolicy"
+            "iam:DetachUserPolicy",
+            "iam:GetUser",
+            "iam:ListUserTags"
           ]
           Resource = "*"
         }

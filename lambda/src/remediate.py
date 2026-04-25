@@ -14,6 +14,8 @@ sns = boto3.client("sns")
 
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN", "")
+EXCEPTION_TAG_KEY = os.getenv("EXCEPTION_TAG_KEY", "SecurityApproved")
+EXCEPTION_TAG_VALUE = os.getenv("EXCEPTION_TAG_VALUE", "true")
 
 PROTECTED_USERS = {
     "SecurityteamAdmin",
@@ -83,6 +85,30 @@ def parse_cloudtrail_event(event: Dict[str, Any]) -> Dict[str, Optional[str]]:
     }
 
 
+def user_has_exception_tag(user_name: str) -> Tuple[bool, str]:
+    try:
+        response = iam.list_user_tags(UserName=user_name)
+        tags = response.get("Tags", [])
+
+        for tag in tags:
+            key = tag.get("Key")
+            value = tag.get("Value")
+
+            if (
+                key == EXCEPTION_TAG_KEY
+                and str(value).lower() == EXCEPTION_TAG_VALUE.lower()
+            ):
+                return True, (
+                    f"User has approved exception tag: "
+                    f"{EXCEPTION_TAG_KEY}={EXCEPTION_TAG_VALUE}"
+                )
+
+        return False, "No approved exception tag found"
+
+    except ClientError as exc:
+        return False, f"Unable to read user tags: {str(exc)}"
+
+
 def should_remediate(parsed: Dict[str, Optional[str]]) -> Tuple[bool, str]:
     event_name = parsed.get("event_name")
     target_user_name = parsed.get("target_user_name")
@@ -104,6 +130,10 @@ def should_remediate(parsed: Dict[str, Optional[str]]) -> Tuple[bool, str]:
 
     if actor_name and target_user_name == actor_name:
         return False, "Actor and target user are the same"
+
+    exception_match, exception_reason = user_has_exception_tag(target_user_name)
+    if exception_match:
+        return False, exception_reason
 
     if not policy_arn:
         return False, "Missing policy ARN"

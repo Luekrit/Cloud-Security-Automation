@@ -68,6 +68,8 @@ module "lambda_global" {
 
   environment_variables = {
     SNS_TOPIC_ARN = module.sns_global.topic_arn
+    EXCEPTION_TAG_KEY   = "SecurityApproved"
+    EXCEPTION_TAG_VALUE = "true"
   }
 
   tags = merge(local.common_tags, { RegionScope = "global-us-east-1" })
