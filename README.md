@@ -72,7 +72,7 @@ graph TD
 
 The system currently monitors IAM-related API activity, with the main validated use case focused on:
 
-- AttachRolePolicy  
+- AttachUserPolicy  
 
 EventBridge filters matching CloudTrail events in real time and invokes the Lambda response workflow.
 
@@ -143,7 +143,7 @@ This provides:
 
 To validate the system, the following scenario is tested:
 
-1. A user or role is granted the **AdministratorAccess** policy  
+1. An IAM user is granted the **AdministratorAccess** policy  
 2. CloudTrail records the IAM policy change  
 3. EventBridge detects the matching event  
 4. Lambda evaluates the event
