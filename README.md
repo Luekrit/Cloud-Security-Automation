@@ -228,10 +228,10 @@ This phase validated the end-to-end detection, alerting, and governance-aware ex
 **Evidence**
 
 **Figure 1. Test A — CloudWatch log showing detection, SNS alerting, and dry-run remediation approval**  
-![Test A CloudWatch Logs](https://github.com/Luekrit/Cloud-Security-Automation/blob/main/diagrams/Log%20Event%20test%20A.png)
+![Test A CloudWatch Logs](diagrams/Log%20Event%20test%20A.png)
 
 **Figure 2. Test A — SNS email alert showing remediation approved**  
-![Test A SNS Email Alert](https://github.com/Luekrit/Cloud-Security-Automation/blob/main/diagrams/SNS%20notification%20Test%20A.png)
+![Test A SNS Email Alert](diagrams/SNS%20notification%20Test%20A.png)
 
 **Outcome**
 - Detection worked
