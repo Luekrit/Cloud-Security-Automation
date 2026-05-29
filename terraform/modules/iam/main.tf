@@ -6,6 +6,15 @@ terraform {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
+data "aws_partition" "current" {}
+
+locals {
+  allowed_test_user_arn             = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:user/iam-test-*"
+  administrator_access_policy_arn   = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AdministratorAccess"
+}
+
 resource "aws_iam_role" "lambda_execution_role" {
   name = "${var.project_name}-${var.environment}-lambda-role"
 
@@ -39,19 +48,31 @@ resource "aws_iam_role_policy" "lambda_remediation_policy" {
     Statement = concat(
       [
         {
-          Sid    = "AllowIamReadAndDetachUserPolicy"
+          Sid    = "AllowReadTestIamUserForExceptionCheck"
           Effect = "Allow"
           Action = [
-            "iam:DetachUserPolicy",
             "iam:GetUser",
             "iam:ListUserTags"
           ]
-          Resource = "*"
+          Resource = local.allowed_test_user_arn
+        },
+        {
+          Sid    = "AllowDetachAdministratorAccessFromTestUsersOnly"
+          Effect = "Allow"
+          Action = [
+            "iam:DetachUserPolicy"
+          ]
+          Resource = local.allowed_test_user_arn
+          Condition = {
+            StringEquals = {
+              "iam:PolicyARN" = local.administrator_access_policy_arn
+            }
+          }
         }
       ],
       var.sns_topic_arn != "" ? [
         {
-          Sid    = "AllowPublishToSns"
+          Sid    = "AllowPublishToProjectSnsTopic"
           Effect = "Allow"
           Action = [
             "sns:Publish"
