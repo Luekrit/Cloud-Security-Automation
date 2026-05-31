@@ -278,7 +278,7 @@ This phase validated the end-to-end detection, alerting, and governance-aware ex
 ![Test A CloudWatch Logs](diagrams/Log%20Event%20test%20A.png)
 
 **Figure 2. Test A — SNS email alert showing remediation approved**  
-![Test A SNS Email Alert](diagrams/SNS%20notification%20Test%20A.png)
+![Test A SNS Email Alert](diagrams/Screenshot%202026-06-01%20004841.png)
 
 **Outcome**
 - Detection worked
@@ -321,7 +321,7 @@ This phase validated the end-to-end detection, alerting, and governance-aware ex
 ![Test B CloudWatch Logs](diagrams/log%20event%20Test%20B.png)
 
 **Figure 4. Test B — SNS email alert showing approved exception decision**  
-![Test B SNS Email Alert](diagrams/SNS%20notification%20Test%20B.png)
+![Test B SNS Email Alert](diagrams/Screenshot%202026-05-29%20114800.png)
 
 **Outcome**
 - Detection worked
