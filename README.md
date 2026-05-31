@@ -64,8 +64,6 @@ graph TD
 ```
 ---
 
----
-
 # Key Security Capabilities
 
 ## Event-Driven Threat Detection
@@ -193,8 +191,57 @@ graph TD
 - State locking using **DynamoDB**  
 - Reusable modules for IAM, Lambda, EventBridge, SNS, CloudTrail, and S3
 - Separate global path in us-east-1 for IAM event handling
+- Hardened Lambda execution role with scoped IAM permissions
+- Controlled remediation scope limited to test IAM users matching `iam-test-*`
 
 ---
+
+# Phase 3.5: Infrastructure & Lambda Role Hardening
+
+Before enabling live remediation, I completed a hardening pass to improve the project’s Terraform state management and Lambda execution role permissions.
+
+This phase focused on reducing operational risk before moving from dry-run testing toward controlled enforcement.
+
+## Remote State & Locking Hardening
+
+Terraform state was moved to a remote backend using:
+
+* **Amazon S3** for remote state storage
+* **Amazon DynamoDB** for state locking
+* Separate backend paths for bootstrap and environment state
+* Environment-specific state separation for safer infrastructure management
+
+This improves reliability by preventing local state drift and reducing the risk of concurrent Terraform runs modifying the same infrastructure.
+
+## Lambda Execution Role Hardening
+
+The Lambda remediation policy was also tightened to reduce the blast radius of automated remediation.
+
+The original policy allowed IAM read and detach actions across all resources. This was acceptable for early testing, but too broad for a realistic security automation workflow.
+
+The updated Lambda execution role now limits permissions so the function can:
+
+* Read IAM user details and tags only for controlled test users matching `iam-test-*`
+* Detach only the AWS-managed `AdministratorAccess` policy
+* Apply remediation only to test IAM users matching the `iam-test-*` naming pattern
+* Publish alerts only to the project SNS topic
+
+This improves least-privilege posture while keeping the workflow functional for controlled validation.
+
+## Phase 3.5 Validation
+
+After applying the Terraform changes, the workflow was retested in dry-run mode.
+
+Validation confirmed:
+
+* Terraform applied the IAM policy update successfully with `0 added, 1 changed, 0 destroyed`
+* SNS alerting continued to work
+* CloudWatch logs confirmed Lambda execution
+* Test A: user without an exception tag was approved for remediation in dry-run mode
+* Test B: user with `SecurityApproved=true` was detected but skipped for remediation
+* `DRY_RUN=true` remained enabled, so no live policy detachment occurred
+
+This confirms the automation can still detect risky IAM activity, send alerts, evaluate exception tags, and make remediation decisions after the Lambda role was restricted.
 
 # Validation Results
 
