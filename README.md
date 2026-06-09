@@ -64,15 +64,13 @@ graph TD
 ```
 ---
 
----
-
 # Key Security Capabilities
 
 ## Event-Driven Threat Detection
 
 The system currently monitors IAM-related API activity, with the main validated use case focused on:
 
-- AttachRolePolicy  
+- AttachUserPolicy  
 
 EventBridge filters matching CloudTrail events in real time and invokes the Lambda response workflow.
 
@@ -143,7 +141,7 @@ This provides:
 
 To validate the system, the following scenario is tested:
 
-1. A user or role is granted the **AdministratorAccess** policy  
+1. An IAM user is granted the **AdministratorAccess** policy  
 2. CloudTrail records the IAM policy change  
 3. EventBridge detects the matching event  
 4. Lambda evaluates the event
@@ -193,8 +191,57 @@ graph TD
 - State locking using **DynamoDB**  
 - Reusable modules for IAM, Lambda, EventBridge, SNS, CloudTrail, and S3
 - Separate global path in us-east-1 for IAM event handling
+- Hardened Lambda execution role with scoped IAM permissions
+- Controlled remediation scope limited to test IAM users matching `iam-test-*`
 
 ---
+
+# Phase 3.5: Infrastructure & Lambda Role Hardening
+
+Before enabling live remediation, I completed a hardening pass to improve the project’s Terraform state management and Lambda execution role permissions.
+
+This phase focused on reducing operational risk before moving from dry-run testing toward controlled enforcement.
+
+## Remote State & Locking Hardening
+
+Terraform state was moved to a remote backend using:
+
+* **Amazon S3** for remote state storage
+* **Amazon DynamoDB** for state locking
+* Separate backend paths for bootstrap and environment state
+* Environment-specific state separation for safer infrastructure management
+
+This improves reliability by preventing local state drift and reducing the risk of concurrent Terraform runs modifying the same infrastructure.
+
+## Lambda Execution Role Hardening
+
+The Lambda remediation policy was also tightened to reduce the blast radius of automated remediation.
+
+The original policy allowed IAM read and detach actions across all resources. This was acceptable for early testing, but too broad for a realistic security automation workflow.
+
+The updated Lambda execution role now limits permissions so the function can:
+
+* Read IAM user details and tags only for controlled test users matching `iam-test-user`
+* Detach only the AWS-managed `AdministratorAccess` policy
+* Apply remediation only to test IAM users matching the `iam-test-user` naming pattern
+* Publish alerts only to the project SNS topic
+
+This improves least-privilege posture while keeping the workflow functional for controlled validation.
+
+## Phase 3.5 Validation
+
+After applying the Terraform changes, the workflow was retested in dry-run mode.
+
+Validation confirmed:
+
+* Terraform applied the IAM policy update successfully with `0 added, 1 changed, 0 destroyed`
+* SNS alerting continued to work
+* CloudWatch logs confirmed Lambda execution
+* Test A: user without an exception tag was approved for remediation in dry-run mode
+* Test B: user with `SecurityApproved=true` was detected but skipped for remediation
+* `DRY_RUN=true` remained enabled, so no live policy detachment occurred
+
+This confirms the automation can still detect risky IAM activity, send alerts, evaluate exception tags, and make remediation decisions after the Lambda role was restricted.
 
 # Validation Results
 
@@ -228,10 +275,10 @@ This phase validated the end-to-end detection, alerting, and governance-aware ex
 **Evidence**
 
 **Figure 1. Test A — CloudWatch log showing detection, SNS alerting, and dry-run remediation approval**  
-![Test A CloudWatch Logs](https://github.com/Luekrit/Cloud-Security-Automation/blob/5a6adbb0da548bb17a2074b219dda3021f854f92/diagrams/Screenshot%20test%20A%20log%20Event.png)
+![Test A CloudWatch Logs](diagrams/Log%20Event%20test%20A.png)
 
 **Figure 2. Test A — SNS email alert showing remediation approved**  
-![Test A SNS Email Alert](https://github.com/Luekrit/Cloud-Security-Automation/blob/main/diagrams/Screenshot%20SNS%20notifications%20for%20Test%20A.png)
+![Test A SNS Email Alert](diagrams/Screenshot%202026-06-01%20004841.png)
 
 **Outcome**
 - Detection worked
@@ -271,10 +318,10 @@ This phase validated the end-to-end detection, alerting, and governance-aware ex
 **Evidence**
 
 **Figure 3. Test B — CloudWatch log showing alerting and exception-based remediation skip**  
-![[Test B CloudWatch Logs](screenshots/test-b-cloudwatch.png)](https://github.com/Luekrit/Cloud-Security-Automation/blob/main/diagrams/Screenshot%20Log%20Event%20for%20Test%20B.png)
+![Test B CloudWatch Logs](diagrams/log%20event%20Test%20B.png)
 
 **Figure 4. Test B — SNS email alert showing approved exception decision**  
-![[Test B SNS Email Alert](screenshots/test-b-email.png)](https://github.com/Luekrit/Cloud-Security-Automation/blob/main/diagrams/Screenshot%20SNS%20notification%20for%20test%20B.png)
+![Test B SNS Email Alert](diagrams/Screenshot%202026-05-29%20114800.png)
 
 **Outcome**
 - Detection worked
