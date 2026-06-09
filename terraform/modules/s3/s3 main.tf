@@ -18,8 +18,13 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      # SSE-KMS gives you key rotation and CloudTrail audit of every decrypt
+      # SSE-S3 (AES256) does not
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = var.kms_key_arn
     }
+    # Prevents objects being uploaded without encryption
+    bucket_key_enabled = true
   }
 }
 
