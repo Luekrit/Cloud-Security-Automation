@@ -221,9 +221,9 @@ The original policy allowed IAM read and detach actions across all resources. Th
 
 The updated Lambda execution role now limits permissions so the function can:
 
-* Read IAM user details and tags only for controlled test users matching `iam-test-*`
+* Read IAM user details and tags only for controlled test users matching `iam-test-user`
 * Detach only the AWS-managed `AdministratorAccess` policy
-* Apply remediation only to test IAM users matching the `iam-test-*` naming pattern
+* Apply remediation only to test IAM users matching the `iam-test-user` naming pattern
 * Publish alerts only to the project SNS topic
 
 This improves least-privilege posture while keeping the workflow functional for controlled validation.
