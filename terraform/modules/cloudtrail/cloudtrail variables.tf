@@ -30,3 +30,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "cloudtrail_kms_key_arn" {
+  description = "KMS key ARN used to encrypt CloudTrail logs"
+  type        = string
+  default     = null
+}
