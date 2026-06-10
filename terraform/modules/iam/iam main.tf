@@ -11,8 +11,8 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  allowed_test_user_arn             = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:user/iam-test-*"
-  administrator_access_policy_arn   = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AdministratorAccess"
+  allowed_test_user_arn           = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:user/iam-test-*"
+  administrator_access_policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AdministratorAccess"
 }
 
 resource "aws_iam_role" "lambda_execution_role" {
