@@ -10,7 +10,7 @@ This project simulates how modern cloud environments detect risky IAM privilege 
 
 # Project Overview
 
-This project implements a **self-healing cloud security architecture** that detects high-risk IAM policy attachment activity in near real time.
+This project implements a **cloud security automation architecture** that detects high-risk IAM policy attachment activity in near real time.
 
 Instead of relying on manual incident response, the system:
 
