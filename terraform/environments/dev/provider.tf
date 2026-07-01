@@ -1,12 +1,12 @@
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.11.0"
 
   backend "s3" {
-    bucket         = "luekrit-tf-state"
-    key            = "cloud-security-automation/dev/terraform.tfstate"
-    region         = "ap-southeast-2"
-    dynamodb_table = "terraform-state-lock"
-    encrypt        = true
+    bucket       = "luekrit-tf-state"
+    key          = "cloud-security-automation/dev/terraform.tfstate"
+    region       = "ap-southeast-2"
+    use_lockfile = true
+    encrypt      = true
   }
 
   required_providers {
