@@ -28,39 +28,42 @@ The current implementation focuses on **AdministratorAccess attachment detection
 # Architecture Diagram
 
 ```mermaid
-graph TD
-    classDef trigger fill:#ed2c13,stroke:#333,stroke-width:2px;
-    classDef logic fill:#326ee6,stroke:#333,stroke-width:2px;
-    classDef action fill:#d4772a,stroke:#333,stroke-width:2px;
-    classDef final fill:#7330e6,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5;
+flowchart TB
+    ACTOR["IAM principal<br/>(user or role making API calls)"]
 
-    subgraph Detection_Layer [1. Detection]
-        A[<b>IAM / Security Events</b><br/>AttachUserPolicy]:::trigger --> B[<b>AWS CloudTrail</b><br/>Records API Activity]
+    subgraph USE1["AWS us-east-1 (global IAM events surface here)"]
+        EB["EventBridge rule<br/>IAM risk detection"]
+        LAM["Lambda: remediate.py<br/>evaluate, decide, act"]
+        DDB[("DynamoDB<br/>exception governance:<br/>status, expiry, reviewer, evidence")]
+        SNS["SNS: global-security-alerts<br/>encrypted at rest (aws/sns key)"]
+        SUB["Subscribers<br/>(email / ops)"]
     end
 
-    subgraph Routing_Layer [2. Filtering]
-        B --> C[<b>Amazon EventBridge</b><br/>Matches Security Event Patterns]:::logic
+    subgraph APSE2["AWS ap-southeast-2 (home region and baseline)"]
+        CT["CloudTrail multi-region trail<br/>global service events on<br/>log file validation on"]
+        S3[("S3 log bucket<br/>logs + validation digests<br/>SSE-KMS + Bucket Keys")]
+        KCT["KMS customer-managed key<br/>CloudTrail log encryption"]
     end
 
-    subgraph Logic_Layer [3. Logic Engine]
-        C --> D[<b>AWS Lambda</b><br/><i>remediate.py</i>]:::logic
-        D --> D1[Parse Event Metadata]
-        D --> D2[Evaluate Risk]
-        D --> D3[Check Governance Exceptions]
-        D --> D4[Decide Remediate or Skip]
-    end
+    ROLE{{"Lambda execution role<br/>least privilege IAM<br/>+ KMS perms for SNS key"}}
 
-    subgraph Response_Layer [4. Response]
-        D4 --> E[<b>SNS Email Alert</b><br/>Structured Security Notification]:::action
-        D4 --> F[<b>CloudWatch Logs</b><br/>Audit Trail and Debugging]:::action
-        D4 --> G[<b>IAM Remediation</b><br/>Detach Policy in Enforcement Mode]:::action
-    end
+    ACTOR -->|API activity| CT
+    CT -->|deliver logs| S3
+    KCT -.->|encrypts| S3
+    KCT -.->|encrypts log files| CT
+    CT -->|global events| EB
+    EB -->|risky action: PutUserPolicy /<br/>CreateAccessKey / CreateLoginProfile| LAM
+    LAM -->|check for approved exception| DDB
+    DDB -->|decision| LAM
+    LAM -->|remediate if no valid exception| ACTOR
+    LAM -->|publish alert| SNS
+    SNS --> SUB
+    ROLE -.->|assumed by| LAM
 
-    subgraph Outcome [5. Desired State]
-        G --> H[<b>Least Privilege Preserved</b>]:::final
-        E --> H
-        F --> H
-    end
+    classDef store fill:#e0e7ff,stroke:#4338ca,color:#111827;
+    classDef sec fill:#fee2e2,stroke:#b91c1c,color:#111827;
+    class DDB,S3 store;
+    class KCT,ROLE sec;
 ```
 ---
 
