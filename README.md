@@ -188,11 +188,56 @@ graph TD
 - Modular Terraform architecture  
 - Secure access using **AssumeRole (no long-term credentials)**  
 - Remote state storage in **S3**  
-- State locking using **DynamoDB**  
+- S3 Native Locking (use_lockfile = true)  
 - Reusable modules for IAM, Lambda, EventBridge, SNS, CloudTrail, and S3
 - Separate global path in us-east-1 for IAM event handling
 - Hardened Lambda execution role with scoped IAM permissions
 - Controlled remediation scope limited to test IAM users matching `iam-test-*`
+
+---
+
+# Project Phases
+
+This project was built incrementally, with each phase validated before moving to the next.
+
+---
+
+## Phase 1: Initial Deployment & Secure Credential Model
+
+Before writing any application logic, I established a secure foundation for managing infrastructure.
+
+- Set up a least-privilege Terraform execution model using an IAM operator profile with AssumeRole, avoiding long-term admin credentials for deployment
+- Built initial Terraform modules for IAM, Lambda, and EventBridge
+- Deployed the core pipeline skeleton — Lambda function, Lambda execution role, EventBridge rule and target, and the Lambda invoke permission — and confirmed successful deployment via Terraform state and outputs
+- Adopted a deploy/destroy workflow (`terraform apply` → test → `terraform destroy`) to control AWS cost during development
+
+This phase produced a working infrastructure skeleton, not yet a validated detection or remediation control.
+
+---
+
+## Phase 2: Backend Separation & Detection Logic Refinement
+
+With the skeleton in place, I focused on separating infrastructure concerns and correcting the detection logic.
+
+- Split Terraform state management into a dedicated bootstrap module (S3 state bucket + DynamoDB lock table), separate from the `dev` environment state
+- Reviewed the initial Lambda logging logic and corrected a mismatch: the log message described IAM user creation, but the EventBridge rule was actually monitoring IAM policy-attachment events (`AttachUserPolicy`, `AttachRolePolicy`, `PutUserPolicy`, etc.)
+- Rebuilt the Lambda function as an event-aware, logging-only version that correctly parses `eventName`, `userName`, `roleName`, and `policyArn` from the CloudTrail event detail — remediation logic was intentionally deferred to a later phase
+
+---
+
+## Phase 3: Full Module Implementation & Global IAM Architecture
+
+This phase completed the remaining infrastructure modules and resolved a significant architectural issue.
+
+- Implemented the remaining CloudTrail, EventBridge, and S3 Terraform modules
+- During testing, IAM events were not appearing in CloudTrail or triggering EventBridge in the primary region. Root cause: **IAM is a global AWS service**, and its management events are only reliably captured by CloudTrail and matched by EventBridge in `us-east-1`
+- Redesigned the architecture to add a dedicated global detection path — a second Lambda, EventBridge rule, and SNS topic (`lambda_global`, `eventbridge_global`, `sns_global`) deployed via the `aws.global` provider alias — to correctly capture and process real IAM events
+- Implemented SNS email alerting and tag-based exception handling (`SecurityApproved=true` on the target IAM user)
+- Validated the full pipeline with two test scenarios:
+  - **Test A** (no exception tag): risky `AttachUserPolicy` event detected, SNS alert sent, remediation approved in dry-run mode
+  - **Test B** (approved exception tag): event still detected and alerted, but remediation correctly skipped due to the exception tag
+
+This phase produced the first fully working, validated dry-run detection-to-decision pipeline.
 
 ---
 
@@ -221,7 +266,7 @@ The original policy allowed IAM read and detach actions across all resources. Th
 
 The updated Lambda execution role now limits permissions so the function can:
 
-* Read IAM user details and tags only for controlled test users matching `iam-test-user`
+* Read IAM user details and tags only for controlled test users matching `iam-test-user.`
 * Detach only the AWS-managed `AdministratorAccess` policy
 * Apply remediation only to test IAM users matching the `iam-test-user` naming pattern
 * Publish alerts only to the project SNS topic
@@ -379,8 +424,7 @@ The goal of this project is to demonstrate how **automation and security enginee
 
 # Future Improvements
 
-- Add detection for additional IAM abuse scenarios  
-- Integrate alerting via **SNS / Slack notifications**  
+- Add detection for additional IAM abuse scenarios   
 - Expand remediation logic for broader security events  
 - Integrate with **AWS Security Hub or SIEM tools**  
 - Add anomaly detection for unusual API behavior  
