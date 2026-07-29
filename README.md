@@ -28,39 +28,42 @@ The current implementation focuses on **AdministratorAccess attachment detection
 # Architecture Diagram
 
 ```mermaid
-graph TD
-    classDef trigger fill:#ed2c13,stroke:#333,stroke-width:2px;
-    classDef logic fill:#326ee6,stroke:#333,stroke-width:2px;
-    classDef action fill:#d4772a,stroke:#333,stroke-width:2px;
-    classDef final fill:#7330e6,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5;
+flowchart TB
+    ACTOR["IAM principal<br/>(user or role making API calls)"]
 
-    subgraph Detection_Layer [1. Detection]
-        A[<b>IAM / Security Events</b><br/>AttachUserPolicy]:::trigger --> B[<b>AWS CloudTrail</b><br/>Records API Activity]
+    subgraph USE1["AWS us-east-1 (global IAM events surface here)"]
+        EB["EventBridge rule<br/>IAM risk detection"]
+        LAM["Lambda: remediate.py<br/>evaluate, decide, act"]
+        DDB[("DynamoDB<br/>exception governance:<br/>status, expiry, reviewer, evidence")]
+        SNS["SNS: global-security-alerts<br/>encrypted at rest (aws/sns key)"]
+        SUB["Subscribers<br/>(email / ops)"]
     end
 
-    subgraph Routing_Layer [2. Filtering]
-        B --> C[<b>Amazon EventBridge</b><br/>Matches Security Event Patterns]:::logic
+    subgraph APSE2["AWS ap-southeast-2 (home region and baseline)"]
+        CT["CloudTrail multi-region trail<br/>global service events on<br/>log file validation on"]
+        S3[("S3 log bucket<br/>logs + validation digests<br/>SSE-KMS + Bucket Keys")]
+        KCT["KMS customer-managed key<br/>CloudTrail log encryption"]
     end
 
-    subgraph Logic_Layer [3. Logic Engine]
-        C --> D[<b>AWS Lambda</b><br/><i>remediate.py</i>]:::logic
-        D --> D1[Parse Event Metadata]
-        D --> D2[Evaluate Risk]
-        D --> D3[Check Governance Exceptions]
-        D --> D4[Decide Remediate or Skip]
-    end
+    ROLE{{"Lambda execution role<br/>least privilege IAM<br/>+ KMS perms for SNS key"}}
 
-    subgraph Response_Layer [4. Response]
-        D4 --> E[<b>SNS Email Alert</b><br/>Structured Security Notification]:::action
-        D4 --> F[<b>CloudWatch Logs</b><br/>Audit Trail and Debugging]:::action
-        D4 --> G[<b>IAM Remediation</b><br/>Detach Policy in Enforcement Mode]:::action
-    end
+    ACTOR -->|API activity| CT
+    CT -->|deliver logs| S3
+    KCT -.->|encrypts| S3
+    KCT -.->|encrypts log files| CT
+    CT -->|global events| EB
+    EB -->|risky action: PutUserPolicy /<br/>CreateAccessKey / CreateLoginProfile| LAM
+    LAM -->|check for approved exception| DDB
+    DDB -->|decision| LAM
+    LAM -->|remediate if no valid exception| ACTOR
+    LAM -->|publish alert| SNS
+    SNS --> SUB
+    ROLE -.->|assumed by| LAM
 
-    subgraph Outcome [5. Desired State]
-        G --> H[<b>Least Privilege Preserved</b>]:::final
-        E --> H
-        F --> H
-    end
+    classDef store fill:#e0e7ff,stroke:#4338ca,color:#111827;
+    classDef sec fill:#fee2e2,stroke:#b91c1c,color:#111827;
+    class DDB,S3 store;
+    class KCT,ROLE sec;
 ```
 ---
 
@@ -188,7 +191,7 @@ graph TD
 - Modular Terraform architecture  
 - Secure access using **AssumeRole (no long-term credentials)**  
 - Remote state storage in **S3**  
-- State locking using **DynamoDB**  
+- S3 Native Locking (use_lockfile = true)  
 - Reusable modules for IAM, Lambda, EventBridge, SNS, CloudTrail, and S3
 - Separate global path in us-east-1 for IAM event handling
 - Hardened Lambda execution role with scoped IAM permissions
@@ -196,54 +199,52 @@ graph TD
 
 ---
 
-# Phase 3.5: Infrastructure & Lambda Role Hardening
+# Project Phases
 
-Before enabling live remediation, I completed a hardening pass to improve the project’s Terraform state management and Lambda execution role permissions.
+This project was built incrementally, with each phase validated before moving to the next.
 
-This phase focused on reducing operational risk before moving from dry-run testing toward controlled enforcement.
+---
 
-## Remote State & Locking Hardening
+## Phase 1: Initial Deployment & Secure Credential Model
 
-Terraform state was moved to a remote backend using:
+Before writing any application logic, I established a secure foundation for managing infrastructure.
 
-* **Amazon S3** for remote state storage
-* **Amazon DynamoDB** for state locking
-* Separate backend paths for bootstrap and environment state
-* Environment-specific state separation for safer infrastructure management
+- Set up a least-privilege Terraform execution model using an IAM operator profile with AssumeRole, avoiding long-term admin credentials for deployment
+- Built initial Terraform modules for IAM, Lambda, and EventBridge
+- Deployed the core pipeline skeleton — Lambda function, Lambda execution role, EventBridge rule and target, and the Lambda invoke permission — and confirmed successful deployment via Terraform state and outputs
+- Adopted a deploy/destroy workflow (`terraform apply` → test → `terraform destroy`) to control AWS cost during development
 
-This improves reliability by preventing local state drift and reducing the risk of concurrent Terraform runs modifying the same infrastructure.
+This phase produced a working infrastructure skeleton, not yet a validated detection or remediation control.
 
-## Lambda Execution Role Hardening
+---
 
-The Lambda remediation policy was also tightened to reduce the blast radius of automated remediation.
+## Phase 2: Backend Separation & Detection Logic Refinement
 
-The original policy allowed IAM read and detach actions across all resources. This was acceptable for early testing, but too broad for a realistic security automation workflow.
+With the skeleton in place, I focused on separating infrastructure concerns and correcting the detection logic.
 
-The updated Lambda execution role now limits permissions so the function can:
+- Split Terraform state management into a dedicated bootstrap module (S3 state bucket + DynamoDB lock table), separate from the `dev` environment state
+- Reviewed the initial Lambda logging logic and corrected a mismatch: the log message described IAM user creation, but the EventBridge rule was actually monitoring IAM policy-attachment events (`AttachUserPolicy`, `AttachRolePolicy`, `PutUserPolicy`, etc.)
+- Rebuilt the Lambda function as an event-aware, logging-only version that correctly parses `eventName`, `userName`, `roleName`, and `policyArn` from the CloudTrail event detail — remediation logic was intentionally deferred to a later phase
 
-* Read IAM user details and tags only for controlled test users matching `iam-test-user`
-* Detach only the AWS-managed `AdministratorAccess` policy
-* Apply remediation only to test IAM users matching the `iam-test-user` naming pattern
-* Publish alerts only to the project SNS topic
+---
 
-This improves least-privilege posture while keeping the workflow functional for controlled validation.
+## Phase 3: Full Module Implementation & Global IAM Architecture
 
-## Phase 3.5 Validation
+This phase completed the remaining infrastructure modules and resolved a significant architectural issue.
 
-After applying the Terraform changes, the workflow was retested in dry-run mode.
+- Implemented the remaining CloudTrail, EventBridge, and S3 Terraform modules
+- During testing, IAM events were not appearing in CloudTrail or triggering EventBridge in the primary region. Root cause: **IAM is a global AWS service**, and its management events are only reliably captured by CloudTrail and matched by EventBridge in `us-east-1`
+- Redesigned the architecture to add a dedicated global detection path — a second Lambda, EventBridge rule, and SNS topic (`lambda_global`, `eventbridge_global`, `sns_global`) deployed via the `aws.global` provider alias — to correctly capture and process real IAM events
+- Implemented SNS email alerting and tag-based exception handling (`SecurityApproved=true` on the target IAM user)
+- Validated the full pipeline with two test scenarios:
+  - **Test A** (no exception tag): risky `AttachUserPolicy` event detected, SNS alert sent, remediation approved in dry-run mode
+  - **Test B** (approved exception tag): event still detected and alerted, but remediation correctly skipped due to the exception tag
 
-Validation confirmed:
+This phase produced the first fully working, validated dry-run detection-to-decision pipeline.
 
-* Terraform applied the IAM policy update successfully with `0 added, 1 changed, 0 destroyed`
-* SNS alerting continued to work
-* CloudWatch logs confirmed Lambda execution
-* Test A: user without an exception tag was approved for remediation in dry-run mode
-* Test B: user with `SecurityApproved=true` was detected but skipped for remediation
-* `DRY_RUN=true` remained enabled, so no live policy detachment occurred
+---
 
-This confirms the automation can still detect risky IAM activity, send alerts, evaluate exception tags, and make remediation decisions after the Lambda role was restricted.
-
-# Validation Results
+## Phase 3: Validation Results
 
 This phase validated the end-to-end detection, alerting, and governance-aware exception handling of the project in **dry-run mode**.
 
@@ -331,18 +332,130 @@ This phase validated the end-to-end detection, alerting, and governance-aware ex
 
 ---
 
-## Validation Summary
+## Phase 3.5: Infrastructure & Lambda Role Hardening
 
-These tests confirmed that the control can:
+Before enabling live remediation, I completed a hardening pass to improve the project’s Terraform state management and Lambda execution role permissions.
 
-- detect risky IAM policy attachment events
-- alert security teams through SNS email
-- support safe rollout using dry-run mode
-- apply governance-aware exception handling using IAM user tags
+This phase focused on reducing operational risk before moving from dry-run testing toward controlled enforcement.
 
-This phase demonstrates a more realistic security engineering workflow:
+## Remote State & Locking Hardening
 
-**CloudTrail → EventBridge → Lambda → SNS alert → Dry-run remediation decision**
+Terraform state was moved to a remote backend using:
+
+* **Amazon S3** for remote state storage
+* **Amazon DynamoDB** for state locking
+* Separate backend paths for bootstrap and environment state
+* Environment-specific state separation for safer infrastructure management
+
+This improves reliability by preventing local state drift and reducing the risk of concurrent Terraform runs modifying the same infrastructure.
+
+## Lambda Execution Role Hardening
+
+The Lambda remediation policy was also tightened to reduce the blast radius of automated remediation.
+
+The original policy allowed IAM read and detach actions across all resources. This was acceptable for early testing, but too broad for a realistic security automation workflow.
+
+The updated Lambda execution role now limits permissions so the function can:
+
+* Read IAM user details and tags only for controlled test users matching `iam-test-user.`
+* Detach only the AWS-managed `AdministratorAccess` policy
+* Apply remediation only to test IAM users matching the `iam-test-user` naming pattern
+* Publish alerts only to the project SNS topic
+
+This improves least-privilege posture while keeping the workflow functional for controlled validation.
+
+## Phase 3.5 Validation
+
+After applying the Terraform changes, the workflow was retested in dry-run mode.
+
+Validation confirmed:
+
+* Terraform applied the IAM policy update successfully with `0 added, 1 changed, 0 destroyed`
+* SNS alerting continued to work
+* CloudWatch logs confirmed Lambda execution
+* Test A: user without an exception tag was approved for remediation in dry-run mode
+* Test B: user with `SecurityApproved=true` was detected but skipped for remediation
+* `DRY_RUN=true` remained enabled, so no live policy detachment occurred
+
+This confirms the automation can still detect risky IAM activity, send alerts, evaluate exception tags, and make remediation decisions after the Lambda role was restricted.
+
+---
+
+## Phase 4: Infrastructure Hardening & DynamoDB Exception Governance
+
+This phase runs two parallel workstreams. The hardening controls are complete.
+The DynamoDB exception governance workstream is currently in progress.
+
+---
+
+## Phase 4 Workstream 1: Infrastructure Hardening Controls ✅
+
+Before expanding remediation scope, I completed a hardening pass focused on
+audit integrity, encryption governance, and infrastructure maintainability.
+
+### CloudTrail Log File Validation
+- Enabled CloudTrail digest files, making the audit trail tamper-evident
+- Digest files reveal whether log files were modified or deleted after delivery
+- This addresses a gap where detection could work but evidence integrity
+  could not be proven
+
+### S3 Log Bucket Encryption (SSE-KMS with Bucket Keys)
+- Migrated CloudTrail log bucket from AES-256 to SSE-KMS encryption
+- Enabled Bucket Keys to reduce KMS API request cost at scale
+
+### Customer-Managed KMS Key for CloudTrail
+- Created a dedicated customer-managed KMS key with a readable alias
+- Wrote a scoped key policy granting CloudTrail only what it needs,
+  conditioned on the trail ARN rather than a broad wildcard
+- Confirmed CloudTrail continued logging with no delivery errors after
+  the key switch — a bad key policy fails silently, so this verification
+  was intentional
+- Verified drift-free in Terraform
+
+The principle: an AWS-managed key gets you encryption. A customer-managed
+key gets you governance. For an audit trail, owning the key policy is what
+lets you control who can read the evidence.
+
+### SNS Topic Encryption
+- Encrypted the SNS alert topic at rest
+- Verified the end-to-end alerting path still published correctly after
+  encryption — rather than assuming encryption left it intact
+
+### S3 Native State Locking Migration
+- Replaced the deprecated `dynamodb_table` backend argument with
+  `use_lockfile = true` (GA in Terraform 1.11)
+- Updated minimum Terraform version to `>= 1.11.0`
+- Re-initialized both bootstrap and dev backends
+- Validated locking behavior with a concurrent two-terminal contention
+  test before removing the old DynamoDB table — the second operation
+  correctly failed with a state lock error, proving the new mechanism
+  worked
+- Removed the old `terraform-state-lock` DynamoDB table and cleaned up
+  unused variables and outputs
+- Merged via clean PR
+
+### Production Environment Separation
+- Established an intentionally empty production environment with documented
+  conditions for what must be true before anything is promoted beyond dev
+
+---
+
+## Phase 4 Workstream 2: DynamoDB Exception Governance 🔄 In Progress
+
+The current tag-based exception mechanism (`SecurityApproved=true` on IAM
+users) has a critical security flaw: it is self-approving and bypassable
+by anyone with `iam:TagUser` permission.
+
+This workstream replaces it with a DynamoDB-backed governance table
+providing:
+
+- Maker/checker separation (requester and approver must be different)
+- TTL-based expiry with mandatory read-time expiry checks (DynamoDB TTL
+  deletion can lag up to 48 hours — relying on deletion alone is not safe)
+- Immutable audit trail of exception decisions
+- Exception records stored in `us-east-1` to be visible to `lambda_global`
+
+---
 
 # Security Principles Demonstrated
 
@@ -379,8 +492,7 @@ The goal of this project is to demonstrate how **automation and security enginee
 
 # Future Improvements
 
-- Add detection for additional IAM abuse scenarios  
-- Integrate alerting via **SNS / Slack notifications**  
+- Add detection for additional IAM abuse scenarios   
 - Expand remediation logic for broader security events  
 - Integrate with **AWS Security Hub or SIEM tools**  
 - Add anomaly detection for unusual API behavior  
