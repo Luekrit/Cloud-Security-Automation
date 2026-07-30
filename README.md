@@ -25,6 +25,53 @@ The current implementation focuses on **AdministratorAccess attachment detection
 
 ---
 
+# Business Impact & Security Value
+
+This project addresses real risks that appear in production cloud environments
+and regulated industries, including critical infrastructure and financial services.
+
+## Why IAM privilege escalation matters
+
+Unrestricted IAM access is one of the most common entry points for cloud
+breaches. Attaching AdministratorAccess to a user grants full control over
+an AWS account — including the ability to create backdoor credentials, exfiltrate
+data, or destroy infrastructure. In regulated environments such as those governed
+by APRA CPS 234 or the ASD Essential Eight, detecting and responding to
+privilege escalation is a baseline control requirement, not an optional feature.
+
+Manual incident response introduces detection lag. This project demonstrates
+how event-driven automation reduces that lag to near real time.
+
+## Control value by phase
+
+**Detection and alerting (Phase 3)**
+The pipeline detects a risky IAM policy attachment and notifies the security
+team within seconds of the API call. Without this, the same activity would
+only surface in a periodic access review or a manual CloudTrail query —
+potentially hours or days later.
+
+**Governance-aware exception handling (Phase 3)**
+Blanket auto-remediation creates operational risk — it can remove legitimate
+access and cause outages. The tag-based exception mechanism, and its replacement
+DynamoDB governance layer, mean the control can operate in environments where
+some privileged access is intentional and approved, without generating false
+positive remediations.
+
+**Blast radius control (Phase 3.5)**
+Restricting the Lambda execution role to iam-test-* users and a single policy
+ARN means a misconfiguration or bug in the remediation logic cannot affect
+production identities. This is the principle of least privilege applied to
+the automation itself, not just the resources it manages.
+
+**Audit integrity (Phase 4)**
+Detection is only valuable if the evidence behind it can be trusted. CloudTrail
+log file validation with digest files means tampered or deleted log files can
+be detected. A customer-managed KMS key for log encryption means key access
+can be governed and audited — satisfying the evidence integrity requirements
+that appear in APRA CPS 234 and ISO 27001 audit contexts.
+
+---
+
 # Architecture Diagram
 
 ```mermaid
@@ -159,25 +206,26 @@ To validate the system, the following scenario is tested:
 Infrastructure is deployed using **Terraform with secure best practices**.
 
 ---
+
 ## Infrastructure Design
+
 ```mermaid
-graph TD
-    %% Define Styles
+flowchart TB
     classDef tool fill:#742fba,stroke:#fff,stroke-width:2px,color:#fff;
     classDef iam fill:#f6a800,stroke:#333,stroke-width:2px;
     classDef aws fill:#232f3e,stroke:#fff,stroke-width:2px,color:#fff;
     classDef storage fill:#3b48cc,stroke:#fff,stroke-width:2px,color:#fff;
 
-    A[<b>Terraform CLI</b><br/>Local Machine / CI/CD]:::tool -->|sts:AssumeRole| B[<b>TerraformExecutionRole</b><br/>IAM Role]:::iam
-    
-    B -->|Provision Resources| C[<b>AWS Infrastructure</b><br/>VPC, Lambda, EventBridge]:::aws
-    
-    subgraph Remote_Backend [Remote State Management]
-        D[<b>S3 Bucket</b><br/>Remote State Storage]:::storage
-        E[<b>DynamoDB Table</b><br/>State Locking]:::storage
-        
-        D ---|Stores| F(<b>terraform.tfstate</b>):::storage
-        E ---|Prevents| G(<b>Concurrent Runs</b>):::storage
+    A["Terraform CLI\nLocal Machine / CI/CD"]:::tool -->|sts:AssumeRole| B["TerraformExecutionRole\nIAM Role"]:::iam
+
+    B -->|Provision Resources| C["AWS Infrastructure\nLambda, EventBridge, SNS, CloudTrail"]:::aws
+
+    subgraph Remote_Backend ["Remote State Management"]
+        D[("S3 Bucket\nRemote State Storage")]:::storage
+        E["S3 Native Locking\nuse_lockfile = true"]:::storage
+
+        D -->|Stores| F(["terraform.tfstate"]):::storage
+        E -->|Prevents| G(["Concurrent Runs"]):::storage
     end
 
     C -.->|Update State| D
@@ -244,7 +292,7 @@ This phase produced the first fully working, validated dry-run detection-to-deci
 
 ---
 
-## Phase 3: Validation Results
+## Validation Results
 
 This phase validated the end-to-end detection, alerting, and governance-aware exception handling of the project in **dry-run mode**.
 
@@ -338,18 +386,18 @@ Before enabling live remediation, I completed a hardening pass to improve the pr
 
 This phase focused on reducing operational risk before moving from dry-run testing toward controlled enforcement.
 
-## Remote State & Locking Hardening
+### Remote State & Locking Hardening
 
 Terraform state was moved to a remote backend using:
 
 * **Amazon S3** for remote state storage
-* **Amazon DynamoDB** for state locking
+* **S3 native locking via use_lockfile** = true (migrated from DynamoDB in phase 4)
 * Separate backend paths for bootstrap and environment state
 * Environment-specific state separation for safer infrastructure management
 
 This improves reliability by preventing local state drift and reducing the risk of concurrent Terraform runs modifying the same infrastructure.
 
-## Lambda Execution Role Hardening
+### Lambda Execution Role Hardening
 
 The Lambda remediation policy was also tightened to reduce the blast radius of automated remediation.
 
@@ -357,9 +405,9 @@ The original policy allowed IAM read and detach actions across all resources. Th
 
 The updated Lambda execution role now limits permissions so the function can:
 
-* Read IAM user details and tags only for controlled test users matching `iam-test-user.`
+* Read IAM user details and tags only for controlled test users matching `iam-test-*`
 * Detach only the AWS-managed `AdministratorAccess` policy
-* Apply remediation only to test IAM users matching the `iam-test-user` naming pattern
+* Apply remediation only to test IAM users matching the `iam-test-*` naming pattern
 * Publish alerts only to the project SNS topic
 
 This improves least-privilege posture while keeping the workflow functional for controlled validation.
@@ -456,6 +504,66 @@ providing:
 - Exception records stored in `us-east-1` to be visible to `lambda_global`
 
 ---
+
+# Key Engineering Decisions & Challenges
+
+## Why us-east-1 for IAM event detection
+
+IAM is a global AWS service. During testing, IAM API events were not appearing
+in the ap-southeast-2 CloudTrail or triggering the EventBridge rule in the
+primary region. Root cause: AWS only surfaces IAM management events reliably
+in us-east-1, regardless of where the API call originates.
+
+The fix was to add a dedicated global detection path — a separate Lambda,
+EventBridge rule, and SNS topic deployed via the aws.global provider alias
+in Terraform — rather than moving the entire project to us-east-1 or accepting
+unreliable detection. This is a non-obvious AWS behavior that affects any
+project that automates IAM governance across regions.
+
+## Why DynamoDB governance replaces tag-based exceptions
+
+The original exception mechanism used an IAM user tag (SecurityApproved=true)
+to signal approved exceptions. This has a critical flaw: anyone with
+iam:TagUser permission can add the tag themselves, bypassing the control
+entirely. It is self-approving by design.
+
+The replacement uses a DynamoDB governance table with maker/checker separation
+— the requester and approver must be different identities. It also enforces
+TTL-based expiry, but with a specific constraint: DynamoDB TTL deletion can
+lag up to 48 hours after the expiry timestamp. Relying on TTL deletion alone
+for access control decisions is unsafe. The Lambda logic performs a read-time
+expiry check against the stored timestamp, independent of whether DynamoDB
+has deleted the record yet.
+
+## Why a customer-managed KMS key for CloudTrail
+
+An AWS-managed key provides encryption at rest. A customer-managed key
+provides governance — the ability to define who can decrypt log files,
+scope access by trail ARN, and produce an auditable key policy. For an
+audit trail, the distinction matters: if you cannot govern the key, you
+cannot fully control who reads the evidence. The key policy in this project
+conditions CloudTrail's encryption permission on the specific trail ARN
+rather than a broad wildcard.
+
+## Why S3 native locking replaced DynamoDB state locking
+
+DynamoDB-based Terraform state locking is deprecated as of Terraform 1.11,
+which introduced native S3 lockfile support via use_lockfile = true. The
+migration was validated before removing the old table: two concurrent
+terraform plan operations were run against the same state, confirming the
+second operation correctly failed with a lock contention error before the
+DynamoDB table was decommissioned. This follows the same safety-first
+sequencing used throughout the project — prove the replacement works
+before removing the thing it replaces.
+
+## Why dry-run mode before live remediation
+
+Automated remediation that removes IAM access can cause immediate operational
+impact if the detection logic has a false positive. Dry-run mode allows the
+full pipeline — detection, alerting, exception evaluation, and remediation
+decision — to be validated against real events without risk of disrupting
+access. The control only moves to enforcement after each layer of the
+decision logic has been independently confirmed to work correctly.
 
 # Security Principles Demonstrated
 
