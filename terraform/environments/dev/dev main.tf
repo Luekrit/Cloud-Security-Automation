@@ -15,10 +15,11 @@ data "aws_region" "current" {}
 module "iam" {
   source = "../../modules/iam"
 
-  project_name  = var.project_name
-  environment   = var.environment
-  sns_topic_arn = module.sns_global.topic_arn
-  tags          = local.common_tags
+  project_name        = var.project_name
+  environment         = var.environment
+  sns_topic_arn       = module.sns_global.topic_arn
+  exception_table_arn = module.dynamodb_exceptions_global.table_arn
+  tags                = local.common_tags
 }
 
 module "lambda" {
@@ -194,9 +195,9 @@ module "lambda_global" {
   lambda_source_path = "../../../lambda/src/remediate.py"
 
   environment_variables = {
-    SNS_TOPIC_ARN       = module.sns_global.topic_arn
-    EXCEPTION_TAG_KEY   = "SecurityApproved"
-    EXCEPTION_TAG_VALUE = "true"
+    SNS_TOPIC_ARN          = module.sns_global.topic_arn
+    EXCEPTION_TABLE_NAME   = module.dynamodb_exceptions_global.table_name
+    EXCEPTION_TABLE_REGION = "us-east-1"
   }
 
   tags = merge(local.common_tags, { RegionScope = "global-us-east-1" })
@@ -233,4 +234,23 @@ module "sns_global" {
   topic_name_suffix = "security-alerts"
   email_endpoint    = var.alert_email
   tags              = local.common_tags
+}
+
+module "dynamodb_exceptions_global" {
+  source = "../../modules/dynamodb_exceptions"
+
+  providers = {
+    aws = aws.global
+  }
+
+  table_name = "${var.project_name}-${var.environment}-security-exceptions"
+
+  enable_point_in_time_recovery = true
+  ttl_enabled                   = true
+  ttl_attribute_name            = "ttl_delete_at_epoch"
+
+  tags = merge(local.common_tags, {
+    RegionScope = "global-us-east-1"
+    Phase       = "Phase 4"
+  })
 }
