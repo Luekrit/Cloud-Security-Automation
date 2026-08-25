@@ -1,0 +1,16 @@
+{
+  "pk": {"S": "RESOURCE#iam-test-user"},
+  "sk": {"S": "CONTROL#IAM_ADMIN_POLICY_ATTACHMENT"},
+  "resource_type": {"S": "IAM_USER"},
+  "resource_name": {"S": "iam-test-user"},
+  "control_id": {"S": "IAM_ADMIN_POLICY_ATTACHMENT"},
+  "status": {"S": "APPROVED"},
+  "reason": {"S": "Temporary approved exception for controlled Phase 4 testing"},
+  "requested_by": {"S": "terraform-operator"},
+  "approved_by": {"S": "security-team"},
+  "created_at": {"S": "2026-08-16T13:05:00Z"},
+  "approved_at": {"S": "2026-08-16T13:05:00Z"},
+  "expires_at": {"S": "2030-01-01T00:00:00Z"},
+  "expires_at_epoch": {"N": "1893456000"},
+  "ticket_id": {"S": "SEC-001"}
+}

@@ -12,6 +12,11 @@ locals {
 
 resource "aws_sns_topic" "this" {
   name = local.topic_name
+
+  # Encrypts messages at rest using the AWS managed SNS key
+  # Prevents anyone with S3/storage access from reading raw messages
+  kms_master_key_id = "alias/aws/sns"
+
   tags = var.tags
 }
 

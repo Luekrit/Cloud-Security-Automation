@@ -42,6 +42,12 @@ resource "aws_cloudtrail" "this" {
   is_multi_region_trail         = true
   enable_logging                = var.enable_logging
 
+  # Detects if log files are modified or deleted after delivery
+  enable_log_file_validation = true
+
+  # Encrypts CloudTrail-delivered log files using a customer-managed KMS key when provided
+  kms_key_id = var.cloudtrail_kms_key_arn
+
   event_selector {
     read_write_type           = "WriteOnly"
     include_management_events = true
