@@ -2,7 +2,7 @@
 
 An event-driven AWS security engineering project that detects risky IAM privilege changes, alerts operators, evaluates governed exceptions, and prepares remediation decisions using a dry-run-first safety model.
 
-> **Current status:** Phase 4 complete Â· Phase 4.5 security validation next Â· `DRY_RUN=true` Â· no live IAM changes
+> **Current status:** Phase 4 complete · Phase 4.5 security validation next · `DRY_RUN=true` · no live IAM changes
 
 ## Project overview
 
