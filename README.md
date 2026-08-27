@@ -453,6 +453,7 @@ The following Phase 3 evidence demonstrates the original end-to-end detection an
 **Approved tag exception: SNS alert showing skip decision**
 
 ![Test B SNS alert](diagrams/phase-3/04-test-b-sns-skip-decision.png)
+
 ## Current limitations
 
 - Only `AttachUserPolicy` with `AdministratorAccess` is routed and validated end to end.
