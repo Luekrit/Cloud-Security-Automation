@@ -1,8 +1,8 @@
-# Cloud Security Automation & Remediation
+﻿# Cloud Security Automation & Remediation
 
 An event-driven AWS security engineering project that detects risky IAM privilege changes, alerts operators, evaluates governed exceptions, and prepares remediation decisions using a dry-run-first safety model.
 
-> **Current status:** Phase 4 complete · Phase 4.5 security validation next · `DRY_RUN=true` · no live IAM changes
+> **Current status:** Phase 4 complete Â· Phase 4.5 security validation next Â· `DRY_RUN=true` Â· no live IAM changes
 
 ## Project overview
 
@@ -15,7 +15,7 @@ The current end-to-end control detects an AWS-managed `AdministratorAccess` poli
 5. Publishes an SNS alert regardless of whether remediation is approved or skipped.
 6. Records the remediation action that would run while dry-run mode prevents the IAM mutation.
 
-The project is intentionally described as **automation and remediation**, not “self-healing.” Detection, governance, and remediation capability are being validated separately before controlled enforcement is enabled.
+The project is intentionally described as **automation and remediation**, not â€œself-healing.â€ Detection, governance, and remediation capability are being validated separately before controlled enforcement is enabled.
 
 ---
 
@@ -33,23 +33,23 @@ For the covered event, the project replaces dependence on a later manual CloudTr
 
 Phases 1 and 2 established the deployment foundation, remote-state separation, and event-parsing logic. Direct security-control value begins in Phase 3, when the first end-to-end detection, alerting, and dry-run decision path was validated.
 
-**Detection and alerting — Phase 3**
+**Detection and alerting â€” Phase 3**
 
 The first end-to-end pipeline detected an `AttachUserPolicy` event for `AdministratorAccess`, invoked Lambda, and notified the operator through SNS. This reduced reliance on periodic access review for the covered scenario and provided immediate decision context in CloudWatch and email.
 
-**Exception-aware decision proof — Phase 3**
+**Exception-aware decision proof â€” Phase 3**
 
 The original `SecurityApproved=true` IAM tag proved that the workflow could detect and alert on every matching event while choosing different responses for approved and unapproved cases. The tag was intentionally superseded because a principal with `iam:TagUser` could potentially issue its own bypass.
 
-**Automation blast-radius reduction — Phase 3.5**
+**Automation blast-radius reduction â€” Phase 3.5**
 
 The Lambda execution role was restricted to controlled users matching `iam-test-*` and to detaching only the AWS-managed `AdministratorAccess` policy. This limits the damage that a code defect, incorrect event, or configuration error could cause while the system is being validated.
 
-**Governed and scoped exceptions — Phase 4**
+**Governed and scoped exceptions â€” Phase 4**
 
 DynamoDB separates exception data from the IAM resource and scopes each approval to one resource and one control. Lambda can read exception decisions but cannot create or approve them. Status checks, read-time expiry enforcement, and fail-closed error handling reduce the risk of stale, pending, wrong-scope, or unavailable records silently bypassing the control.
 
-**Audit integrity and recoverability — Phase 4**
+**Audit integrity and recoverability â€” Phase 4**
 
 CloudTrail log-file validation makes delivered audit logs tamper-evident. SSE-KMS, a customer-managed key policy, S3 Bucket Keys, structured CloudWatch logs, encrypted SNS alerts, and DynamoDB point-in-time recovery strengthen the protection and recoverability of security evidence.
 
@@ -70,19 +70,19 @@ These capabilities align with common security-governance themes such as least pr
 
 ```mermaid
 flowchart TB
-    API["Risk action<br/>IAM AttachUserPolicy<br/>AdministratorAccess → iam-test-*"]
+    API["Risk action<br/>IAM AttachUserPolicy<br/>AdministratorAccess â†’ iam-test-*"]
 
-    subgraph USE1["us-east-1 · active global IAM response path"]
+    subgraph USE1["us-east-1 Â· active global IAM response path"]
         EB["EventBridge rule<br/>AttachUserPolicy"]
-        LAM["Lambda decision engine<br/>decide · notify · act"]
+        LAM["Lambda decision engine<br/>decide Â· notify Â· act"]
         DDB[("DynamoDB exception registry<br/>RESOURCE#user + CONTROL#control")]
         SNS["SNS security alert"]
         CW["CloudWatch structured logs"]
     end
 
-    subgraph APSE2["ap-southeast-2 · audit evidence path"]
+    subgraph APSE2["ap-southeast-2 Â· audit evidence path"]
         CT["Multi-Region CloudTrail<br/>global service events<br/>log-file validation enabled"]
-        S3[("S3 CloudTrail log bucket<br/>SSE-KMS · Bucket Keys")]
+        S3[("S3 CloudTrail log bucket<br/>SSE-KMS Â· Bucket Keys")]
         KMS["Customer-managed KMS key"]
     end
 
@@ -188,7 +188,7 @@ The current SNS payload includes:
 
 CloudWatch logs capture the governance decision, SNS result, dry-run action, remediation result, and unexpected errors as structured JSON.
 
-## Project evolution: Phases 1–3.5
+## Project evolution: Phases 1â€“3.5
 
 The project was built incrementally. Each phase introduced one architectural capability or reduced one known risk before the next layer was added.
 
@@ -368,7 +368,7 @@ The screenshots below show the deployed controls and the decision paths exercise
 
 ### TTL design correction
 
-The initial expired-exception test returned “no record found” because one timestamp controlled both approval validity and DynamoDB deletion. The record could be deleted before Lambda evaluated why it was invalid.
+The initial expired-exception test returned â€œno record foundâ€ because one timestamp controlled both approval validity and DynamoDB deletion. The record could be deleted before Lambda evaluated why it was invalid.
 
 The corrected design separates:
 
@@ -434,26 +434,25 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 | `terraform/modules/` | Reusable AWS infrastructure modules |
 | `diagrams/` | Architecture and validation evidence |
 
-Historical validation evidence
+## Historical validation evidence
 
 The following Phase 3 evidence demonstrates the original end-to-end detection and alerting pipeline. The IAM-tag exception visible in this historical test was superseded by DynamoDB governance in Phase 4.
 
 **Unapproved attachment: CloudWatch detection and dry-run decision**
 
-![Test A CloudWatch logs](diagrams/Log%20Event%20test%20A.png)
+![Test A CloudWatch logs](diagrams/phase-3/01-test-a-cloudwatch-unapproved.png)
 
 **Unapproved attachment: SNS alert showing remediation approved**
 
-![Test A SNS Alert](diagrams/Screenshot 2026-06-01 004841.png)
+![Test A SNS alert](diagrams/phase-3/02-test-a-sns-remediation-approved.png)
 
 **Approved tag exception: CloudWatch decision evidence from Phase 3**
 
-![Test B CloudWatch logs](diagrams/log%20event%20Test%20B.png)
+![Test B CloudWatch logs](diagrams/phase-3/03-test-b-cloudwatch-approved-tag.png)
 
 **Approved tag exception: SNS alert showing skip decision**
 
-![Test B SNS Alert](diagrams/Screenshot 2026-05-29 114800.png)
-
+![Test B SNS alert](diagrams/phase-3/04-test-b-sns-skip-decision.png)
 ## Current limitations
 
 - Only `AttachUserPolicy` with `AdministratorAccess` is routed and validated end to end.
@@ -477,3 +476,4 @@ Terraform, Python, Boto3, AWS IAM, CloudTrail, EventBridge, Lambda, DynamoDB, SN
 - Fix genuine misconfigurations and document narrowly justified suppressions.
 - Run Prowler against the deployed AWS environment using a separate read-only audit identity.
 - Re-scan and retain sanitized evidence without publishing raw account-level reports.
+
