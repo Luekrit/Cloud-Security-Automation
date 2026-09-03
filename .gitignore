@@ -18,6 +18,7 @@ crash.log
 # Python
 __pycache__/
 *.pyc
+.venv*/
 
 # IDE / Editor
 .vscode/
