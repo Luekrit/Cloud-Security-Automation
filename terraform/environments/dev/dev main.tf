@@ -20,6 +20,7 @@ module "iam" {
   sns_topic_arn       = module.sns_global.topic_arn
   exception_table_arn = module.dynamodb_exceptions_global.table_arn
   tags                = local.common_tags
+  lambda_dlq_arn      = aws_sqs_queue.remediation_dlq.arn
 }
 
 
@@ -160,8 +161,21 @@ module "cloudtrail" {
   tags                   = local.common_tags
 }
 
-# Existing Sydney EventBridge rule
-# You can keep this for now or remove it later after us-east-1 is confirmed working.
+resource "aws_sqs_queue" "remediation_dlq" {
+  provider = aws.global
+
+  name                      = "${var.project_name}-global-${var.environment}-remediation-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+    RegionScope = "global-us-east-1"
+    Purpose     = "Lambda remediation dead-letter queue"
+  }
+}
 
 # New us-east-1 Lambda for real IAM global event detection
 module "lambda_global" {

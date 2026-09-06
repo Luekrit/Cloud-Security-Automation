@@ -121,6 +121,19 @@ resource "aws_iam_role_policy" "lambda_remediation_policy" {
         }
       ] : [],
 
+      # SQS DLQ - allows Lambda to send failed asynchronous invocation records
+      # only to the dedicated remediation dead-letter queue.
+      var.lambda_dlq_arn != "" ? [
+        {
+          Sid    = "AllowSendFailedInvocationsToRemediationDlq"
+          Effect = "Allow"
+          Action = [
+            "sqs:SendMessage"
+          ]
+          Resource = var.lambda_dlq_arn
+        }
+      ] : [],
+
       # Extended live remediation for the new Phase 4 scenarios. Gated behind an
       # explicit flag so the CAPABILITY to delete does not exist until
       # deliberately enabled - defense in depth on top of the DRY_RUN env var.
