@@ -196,7 +196,8 @@ module "lambda_global" {
     EXCEPTION_TABLE_REGION = "us-east-1"
   }
 
-  tags = merge(local.common_tags, { RegionScope = "global-us-east-1" })
+  tags                   = merge(local.common_tags, { RegionScope = "global-us-east-1" })
+  dead_letter_target_arn = aws_sqs_queue.remediation_dlq.arn
 }
 
 # New us-east-1 EventBridge rule for real IAM events

@@ -33,3 +33,8 @@ variable "environment_variables" {
   type    = map(string)
   default = {}
 }
+
+variable "dead_letter_target_arn" {
+  description = "ARN of the dead-letter queue for failed asynchronous Lambda invocations"
+  type        = string
+}
