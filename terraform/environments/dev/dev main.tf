@@ -22,15 +22,6 @@ module "iam" {
   tags                = local.common_tags
 }
 
-module "lambda" {
-  source = "../../modules/lambda"
-
-  project_name       = var.project_name
-  environment        = var.environment
-  lambda_role_arn    = module.iam.lambda_execution_role_arn
-  lambda_source_path = "../../../lambda/src/remediate.py"
-  tags               = local.common_tags
-}
 
 module "cloudtrail_logs_bucket" {
   source = "../../modules/s3"
@@ -171,15 +162,6 @@ module "cloudtrail" {
 
 # Existing Sydney EventBridge rule
 # You can keep this for now or remove it later after us-east-1 is confirmed working.
-module "eventbridge" {
-  source = "../../modules/eventbridge"
-
-  project_name        = var.project_name
-  environment         = var.environment
-  lambda_function_arn = module.lambda.lambda_function_arn
-  event_names         = var.event_names
-  tags                = local.common_tags
-}
 
 # New us-east-1 Lambda for real IAM global event detection
 module "lambda_global" {
