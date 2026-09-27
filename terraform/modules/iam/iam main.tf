@@ -29,6 +29,12 @@ resource "aws_iam_role" "lambda_execution_role" {
           Service = "lambda.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
       }
     ]
   })

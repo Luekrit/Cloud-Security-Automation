@@ -2,7 +2,7 @@
 
 An event-driven AWS security engineering project that detects risky IAM privilege changes, alerts operators, evaluates governed exceptions, and prepares remediation decisions using a dry-run-first safety model.
 
-> **Current status:** Phase 4 complete · Phase 4.5 security validation next · `DRY_RUN=true` · no live IAM changes
+> **Current status:** Phase 4.5 complete · security validation and hardening complete · `DRY_RUN=true` · live IAM remediation disabled
 
 ## Project overview
 
@@ -377,6 +377,66 @@ The corrected design separates:
 
 This matters because DynamoDB TTL deletion is asynchronous and expired records can remain readable until the service deletes them. Security validity therefore cannot depend on physical deletion.
 
+## Phase 4.5 — Security Validation and Hardening
+
+Phase 4.5 added security validation gates using Checkov for Terraform and Prowler for live AWS posture assessment.
+
+### Results
+
+| Validation | Baseline | Final |
+|---|---:|---:|
+| Checkov | 65 passed / 26 failed | 96 passed / 18 failed |
+| Prowler targeted scan | 161 passed / 84 failed | 170 passed / 81 failed |
+
+### Key hardening completed
+
+- Added an SQS dead-letter queue for Lambda asynchronous failures.
+- Integrated CloudTrail with CloudWatch Logs.
+- Encrypted CloudWatch Logs with the CloudTrail customer-managed KMS key.
+- Configured 365-day CloudWatch log retention.
+- Enabled root account MFA.
+- Enabled account-level S3 Block Public Access.
+- Restricted the Lambda execution-role trust policy with `aws:SourceAccount`.
+- Runtime-tested the hardened Lambda role and confirmed successful execution and SNS publishing.
+- Re-ran Prowler to validate the remediated controls.
+
+Not every scanner finding was changed automatically. Remaining findings were reviewed and classified as deferred, contextual, accepted scope, or technical limitations.
+
+See the full validation and finding register:
+
+[`docs/phase-4.5-security-validation.md`](docs/phase-4.5-security-validation.md)
+
+### Phase 4.5 validation evidence
+
+**Final Checkov scan after IaC hardening: 96 passed / 18 reviewed findings / 0 skipped.**
+
+![Final Checkov validation](diagrams/phase%204.5/phase-4.5-21-checkov-after-cloudtrail-cloudwatch.png)
+
+**Lambda execution-role trust hardening: the Lambda role passes Prowler's confused-deputy check while the CloudTrail role remains documented for further compatibility review.**
+
+![Lambda trust remediation](diagrams/phase%204.5/phase-4.5-23-prowler-lambda-trust-remediation.png)
+
+**Final targeted Prowler assessment after remediation: 170 passed / 81 failed, down from 84 failed at baseline.**
+
+![Final Prowler assessment](diagrams/phase%204.5/phase-4.5-24-prowler-targeted-final.png)
+
+<details>
+<summary>Additional Phase 4.5 engineering evidence</summary>
+
+**Legacy Sydney response path removed after validating the active global IAM architecture.**
+
+![Legacy Sydney path removed](diagrams/phase%204.5/phase-4.5-10-legacy-sydney-path-removed.png)
+
+**Lambda asynchronous failures are protected by a verified SQS dead-letter queue.**
+
+![Lambda DLQ validation](diagrams/phase%204.5/phase-4.5-15-lambda-dlq-verified.png)
+
+**CloudTrail-to-CloudWatch integration verified in the deployed AWS environment.**
+
+![CloudTrail CloudWatch verification](diagrams/phase%204.5/phase-4.5-19-cloudtrail-cloudwatch-aws-verified.png)
+
+</details>
+
 ## Engineering decisions
 
 ### Why the response path is in `us-east-1`
@@ -417,8 +477,8 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 | 3 | End-to-end global IAM detection, SNS alerting, and initial tag exception | Complete |
 | 3.5 | Remote-state and Lambda least-privilege hardening | Complete |
 | 4 | Audit hardening and DynamoDB exception governance | **Complete** |
-| 4.5 | Checkov IaC gate and Prowler deployed-posture assessment | Next |
-| 5 | AWS Security Hub integration using ASFF findings | Planned |
+| 4.5 | Checkov IaC gate and Prowler deployed-posture assessment | **Complete** |
+| 5 | AWS Security Hub integration using ASFF findings | **Next** |
 | 6 | Controlled live remediation | Planned |
 | 7 | CI/CD security and deployment gates | Planned |
 | 8 | AI-assisted triage with deterministic enforcement boundaries | Planned |
@@ -460,7 +520,7 @@ The following Phase 3 evidence demonstrates the original end-to-end detection an
 - Live remediation is intentionally disabled.
 - The approval-authoring and maker/checker workflow is currently manual and out-of-band.
 - The additional registry controls still require EventBridge routing, test fixtures, permission review, and end-to-end validation.
-- Phase 4.5 Checkov and Prowler validation has not yet been completed.
+- Remaining Checkov and Prowler findings are documented and classified rather than automatically remediated or suppressed.
 - Security Hub integration, CI/CD enforcement, production monitoring, service-level objectives, and recovery testing remain future work.
 
 These limitations are explicit so the project demonstrates engineering judgement without overstating production maturity.
@@ -471,10 +531,11 @@ Terraform, Python, Boto3, AWS IAM, CloudTrail, EventBridge, Lambda, DynamoDB, SN
 
 ## Next milestone
 
-**Phase 4.5: Security validation gates**
+**Phase 5: AWS Security Hub integration**
 
-- Run Checkov against the Terraform source.
-- Fix genuine misconfigurations and document narrowly justified suppressions.
-- Run Prowler against the deployed AWS environment using a separate read-only audit identity.
-- Re-scan and retain sanitized evidence without publishing raw account-level reports.
+- Integrate the remediation workflow with AWS Security Hub using ASFF findings.
+- Add the minimum required `securityhub:BatchImportFindings` permission.
+- Publish controlled findings from the existing decision engine without changing remediation behavior.
+- Validate findings in Security Hub while keeping `DRY_RUN=true`.
+- Retain sanitized evidence showing the event, governance decision, alert, and Security Hub finding.
 
