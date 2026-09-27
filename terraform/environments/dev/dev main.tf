@@ -20,17 +20,9 @@ module "iam" {
   sns_topic_arn       = module.sns_global.topic_arn
   exception_table_arn = module.dynamodb_exceptions_global.table_arn
   tags                = local.common_tags
+  lambda_dlq_arn      = aws_sqs_queue.remediation_dlq.arn
 }
 
-module "lambda" {
-  source = "../../modules/lambda"
-
-  project_name       = var.project_name
-  environment        = var.environment
-  lambda_role_arn    = module.iam.lambda_execution_role_arn
-  lambda_source_path = "../../../lambda/src/remediate.py"
-  tags               = local.common_tags
-}
 
 module "cloudtrail_logs_bucket" {
   source = "../../modules/s3"
@@ -54,6 +46,36 @@ data "aws_iam_policy_document" "cloudtrail_kms_policy" {
     ]
 
     resources = ["*"]
+  }
+
+  statement {
+    sid    = "AllowCloudWatchLogsEncryption"
+    effect = "Allow"
+
+    principals {
+      type = "Service"
+      identifiers = [
+        "logs.${data.aws_region.current.name}.amazonaws.com"
+      ]
+    }
+
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey"
+    ]
+
+    resources = ["*"]
+
+    condition {
+      test     = "ArnEquals"
+      variable = "kms:EncryptionContext:aws:logs:arn"
+      values = [
+        "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/cloudtrail/${local.cloudtrail_trail_name}"
+      ]
+    }
   }
 
   statement {
@@ -169,16 +191,20 @@ module "cloudtrail" {
   tags                   = local.common_tags
 }
 
-# Existing Sydney EventBridge rule
-# You can keep this for now or remove it later after us-east-1 is confirmed working.
-module "eventbridge" {
-  source = "../../modules/eventbridge"
+resource "aws_sqs_queue" "remediation_dlq" {
+  provider = aws.global
 
-  project_name        = var.project_name
-  environment         = var.environment
-  lambda_function_arn = module.lambda.lambda_function_arn
-  event_names         = var.event_names
-  tags                = local.common_tags
+  name                      = "${var.project_name}-global-${var.environment}-remediation-dlq"
+  message_retention_seconds = 1209600
+  sqs_managed_sse_enabled   = true
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+    RegionScope = "global-us-east-1"
+    Purpose     = "Lambda remediation dead-letter queue"
+  }
 }
 
 # New us-east-1 Lambda for real IAM global event detection
@@ -200,7 +226,8 @@ module "lambda_global" {
     EXCEPTION_TABLE_REGION = "us-east-1"
   }
 
-  tags = merge(local.common_tags, { RegionScope = "global-us-east-1" })
+  tags                   = merge(local.common_tags, { RegionScope = "global-us-east-1" })
+  dead_letter_target_arn = aws_sqs_queue.remediation_dlq.arn
 }
 
 # New us-east-1 EventBridge rule for real IAM events

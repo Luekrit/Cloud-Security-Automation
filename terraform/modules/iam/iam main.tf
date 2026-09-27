@@ -29,6 +29,12 @@ resource "aws_iam_role" "lambda_execution_role" {
           Service = "lambda.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
       }
     ]
   })
@@ -118,6 +124,19 @@ resource "aws_iam_role_policy" "lambda_remediation_policy" {
             "dynamodb:GetItem"
           ]
           Resource = var.exception_table_arn
+        }
+      ] : [],
+
+      # SQS DLQ - allows Lambda to send failed asynchronous invocation records
+      # only to the dedicated remediation dead-letter queue.
+      var.lambda_dlq_arn != "" ? [
+        {
+          Sid    = "AllowSendFailedInvocationsToRemediationDlq"
+          Effect = "Allow"
+          Action = [
+            "sqs:SendMessage"
+          ]
+          Resource = var.lambda_dlq_arn
         }
       ] : [],
 

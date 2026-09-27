@@ -37,3 +37,9 @@ variable "enable_extended_remediation" {
   type        = bool
   default     = false
 }
+
+variable "lambda_dlq_arn" {
+  description = "ARN of the Lambda dead-letter SQS queue. Empty string disables the SQS send grant."
+  type        = string
+  default     = ""
+}

@@ -27,6 +27,10 @@ resource "aws_lambda_function" "remediation_lambda" {
 
   timeout = 30
 
+  dead_letter_config {
+    target_arn = var.dead_letter_target_arn
+  }
+
   environment {
     variables = merge(
       {
