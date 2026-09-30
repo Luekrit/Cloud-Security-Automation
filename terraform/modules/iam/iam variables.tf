@@ -21,7 +21,7 @@ variable "sns_topic_arn" {
 }
 
 variable "sns_kms_key_arn" {
-  description = "ARN of the customer-managed KMS key encrypting the SNS topic. Required when the topic uses SSE-KMS; empty string disables the KMS grant."
+  description = "ARN of the KMS key encrypting the SNS topic (AWS-managed or customer-managed). Required when the topic uses SSE-KMS; empty string disables the KMS grant."
   type        = string
   default     = ""
 }

@@ -12,12 +12,21 @@ data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
 
+# Resolve the existing AWS-managed SNS key in the topic's region.
+# This does not create a new customer-managed key or change topic encryption.
+data "aws_kms_alias" "sns_global" {
+  provider   = aws.global
+  name       = "alias/aws/sns"
+  depends_on = [module.sns_global]
+}
+
 module "iam" {
   source = "../../modules/iam"
 
   project_name        = var.project_name
   environment         = var.environment
   sns_topic_arn       = module.sns_global.topic_arn
+  sns_kms_key_arn     = data.aws_kms_alias.sns_global.target_key_arn
   exception_table_arn = module.dynamodb_exceptions_global.table_arn
   tags                = local.common_tags
   lambda_dlq_arn      = aws_sqs_queue.remediation_dlq.arn
