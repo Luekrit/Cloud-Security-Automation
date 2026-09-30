@@ -1,5 +1,5 @@
 """
-remediate.py - Cloud Security Automation, Phase 4
+remediate.py - Cloud Security Automation, post-Phase 4.5 corrections
 
 Exception governance moved from IAM tags to DynamoDB.
 
@@ -8,14 +8,13 @@ name because they are the things an interviewer will actually push on:
 
   1. DEFAULT DENY / FAIL CLOSED.
      The exception store is a *bypass* mechanism. If it is missing,
-     unreachable, empty, or returns anything other than an explicit,
-     unexpired APPROVED record, we treat that as "no approval" and let
-     remediation proceed. An outage in the approvals database must never
-     become a silent bypass of a security control.
+     empty, or returns an invalid record, no exception is granted. An
+     unavailable store grants no approval either, but postpones mutation
+     and raises after notification so retries/DLQ can retain the event.
 
   2. DECIDE, NOTIFY, ACT - in that order, as three separate steps.
-     We always publish an alert, even when we skip remediation, so detection
-     and alerting never depend on the remediation decision.
+     We attempt an alert for every evaluated event, including skips.
+     Publication failure raises before mutation; unexpected errors raise too.
 
   3. ONE ENGINE, MANY CONTROLS.
      Each risky event is described by a small ControlHandler in
@@ -26,13 +25,15 @@ name because they are the things an interviewer will actually push on:
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 from dataclasses import dataclass, field, asdict
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -46,7 +47,8 @@ sns = boto3.client("sns")
 EXCEPTION_TABLE_REGION = os.getenv("EXCEPTION_TABLE_REGION", os.getenv("AWS_REGION", "us-east-1"))
 dynamodb = boto3.resource("dynamodb", region_name=EXCEPTION_TABLE_REGION)
 
-DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
+# Only an explicit "false" enables mutations. Typos must keep dry-run on.
+DRY_RUN = os.getenv("DRY_RUN", "true").strip().lower() != "false"
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN", "")
 EXCEPTION_TABLE_NAME = os.getenv("EXCEPTION_TABLE_NAME", "")
 
@@ -107,58 +109,58 @@ class ExceptionDecision:
     valid: bool
     reason: str
     record: Optional[Dict[str, Any]] = None
+    lookup_failed: bool = False
 
 
 def check_exception(resource_name: str, control_id: str) -> ExceptionDecision:
-    """
-    Look up DynamoDB for an explicit, unexpired, APPROVED exception scoped to
-    exactly this resource AND this control.
+    """Only a well-formed APPROVED record grants an exception.
 
-    FAIL CLOSED: every error and every "not quite right" path returns
-    valid=False, so the caller remediates. The ONLY way to reach valid=True
-    is a clean positive record. This mirrors the fail-closed behaviour the
-    old tag function already had - we are deliberately not regressing it.
+    Invalid records deny the exception. An unavailable approval store denies
+    approval too, but postpones mutation and surfaces an invocation failure.
     """
     if not EXCEPTION_TABLE_NAME:
-        return ExceptionDecision(False, "Exception table not configured")
+        return ExceptionDecision(False, "Exception table not configured", lookup_failed=True)
 
-    table = dynamodb.Table(EXCEPTION_TABLE_NAME)
-
-    # The composite key is what makes an exception NARROW. An approval is
-    # scoped to one resource and one control. Approval to attach admin to
-    # user A cannot bypass key-creation on user A, nor admin on user B.
     key = {
         "pk": f"RESOURCE#{resource_name}",
         "sk": f"CONTROL#{control_id}",
     }
-
     try:
-        response = table.get_item(Key=key)
-    except ClientError as exc:
-        # We could not read the approvals store. We cannot PROVE an approval
-        # exists, so we do not grant a bypass. Remediation proceeds.
-        return ExceptionDecision(False, f"Exception lookup failed: {exc}")
-
-    item = response.get("Item")
-    if not item:
-        return ExceptionDecision(False, "No exception record found")
-
-    status = item.get("status")
-    if status != "APPROVED":
-        # PENDING = requested but not granted. REVOKED = withdrawn.
-        # Only an explicit positive grant counts.
+        response = dynamodb.Table(EXCEPTION_TABLE_NAME).get_item(
+            Key=key, ConsistentRead=True
+        )
+    except (ClientError, BotoCoreError) as exc:
         return ExceptionDecision(
-            False, f"Exception status is {status}, not APPROVED", item
+            False, f"Exception lookup failed: {exc}", lookup_failed=True
         )
 
-    # DynamoDB TTL deletion is best-effort and can lag well past the
-    # timestamp (often up to ~48h). So we never trust the mere existence of
-    # a record - we re-check expiry in code. Code is authoritative; TTL is
-    # only housekeeping to stop the table growing forever.
-    expires_at_epoch = int(item.get("expires_at_epoch", 0))
+    item = response.get("Item")
+    if item is None:
+        return ExceptionDecision(False, "No exception record found")
+    if not isinstance(item, dict) or not item:
+        return ExceptionDecision(False, "Malformed exception record")
+    # DynamoDB's exact-key lookup establishes scope. Validate returned key
+    # fields too, so malformed fixtures/records cannot become broad approvals.
+    if any(item.get(k) != value for k, value in key.items()):
+        return ExceptionDecision(False, "Exception resource/control key mismatch", item)
+    status = item.get("status")
+    if status != "APPROVED":
+        return ExceptionDecision(False, f"Exception status is {status}, not APPROVED", item)
+
+    expiry = item.get("expires_at_epoch")
+    try:
+        # Boto3 returns DynamoDB numbers as Decimal. Reject booleans, null,
+        # containers, non-finite numbers and fractions; do not truncate them.
+        if isinstance(expiry, bool) or not isinstance(expiry, (str, int, Decimal)):
+            raise ValueError("expiry must be an integer epoch")
+        numeric_expiry = Decimal(str(expiry))
+        if not numeric_expiry.is_finite() or numeric_expiry != numeric_expiry.to_integral_value():
+            raise ValueError("expiry must be a finite integer epoch")
+        expires_at_epoch = int(numeric_expiry)
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
+        return ExceptionDecision(False, "Malformed or missing exception expiry", item)
     if expires_at_epoch <= int(time.time()):
         return ExceptionDecision(False, "Exception has expired", item)
-
     return ExceptionDecision(True, "Valid approved exception found", item)
 
 
@@ -187,11 +189,17 @@ class ControlHandler:
 
 
 def _safe_iam_action(action: str, fn: Callable[[], Any], **context: Any) -> Dict[str, Any]:
-    """Run a single IAM mutation and return a structured result, never raise."""
+    """Return IAM service-error results; transport failures propagate."""
     try:
         fn()
         return {"status": "success", "action": action, **context}
     except ClientError as exc:
+        # A replayed detach can encounter an already absent user/policy.
+        # This narrow no-op rule does not enable other destructive handlers.
+        code = exc.response.get("Error", {}).get("Code")
+        if action == "detach_user_policy" and code == "NoSuchEntity":
+            return {"status": "success", "action": action,
+                    "outcome": "target_already_absent", **context}
         return {"status": "error", "action": action, "error": str(exc), **context}
 
 
@@ -385,7 +393,7 @@ CONTROL_REGISTRY: Dict[str, ControlHandler] = {
 
 @dataclass
 class Decision:
-    action: str  # "REMEDIATE" | "SKIP_APPROVED" | "NO_ACTION"
+    action: str  # REMEDIATE | SKIP_APPROVED | NO_ACTION | RETRY_REQUIRED
     reason: str
     event_name: Optional[str] = None
     control_id: Optional[str] = None
@@ -401,8 +409,6 @@ def evaluate(detail: Dict[str, Any]) -> Decision:
         return Decision("NO_ACTION", f"Unsupported event: {event_name}", event_name)
 
     parsed = handler.parse(detail)
-    actor_arn = get_nested(detail, ["userIdentity", "arn"])
-    actor_name = extract_username_from_arn(actor_arn)
     target_name = handler.resource_name(parsed)
 
     base = dict(event_name=event_name, control_id=handler.control_id)
@@ -413,10 +419,12 @@ def evaluate(detail: Dict[str, Any]) -> Decision:
     if target_name in PROTECTED_USERS:
         return Decision("NO_ACTION", f"Target is protected: {target_name}",
                         resource_name=target_name, **base)
-    if actor_name and actor_name == target_name:
-        # Coarse guardrail so the automation does not fight an operator acting
-        # on themselves. A production system might make this per-control.
-        return Decision("NO_ACTION", "Actor and target are the same",
+    if not isinstance(target_name, str) or not re.fullmatch(r"iam-test-[A-Za-z0-9_+=,.@-]+", target_name):
+        return Decision("NO_ACTION", "Target outside controlled iam-test-* scope",
+                        resource_name=target_name, **base)
+    # Self-issued changes are evaluated normally; actor identity is not approval.
+    if detail.get("errorCode"):
+        return Decision("NO_ACTION", "IAM API call failed; no successful change to remediate",
                         resource_name=target_name, **base)
 
     risk = handler.is_risky(parsed)
@@ -426,6 +434,8 @@ def evaluate(detail: Dict[str, Any]) -> Decision:
     # Only now - once we know the action is genuinely risky - do we spend a
     # DynamoDB read consulting the approvals store.
     exc = check_exception(target_name, handler.control_id)
+    if exc.lookup_failed:
+        return Decision("RETRY_REQUIRED", exc.reason, resource_name=target_name, **base)
     if exc.valid:
         return Decision("SKIP_APPROVED", exc.reason, resource_name=target_name,
                         exception_record=exc.record, **base)
@@ -460,7 +470,7 @@ def build_alert_payload(detail: Dict[str, Any], decision: Decision) -> Dict[str,
 
 def publish_sns_alert(subject: str, message: Dict[str, Any]) -> Dict[str, Any]:
     if not SNS_TOPIC_ARN:
-        return {"status": "skipped", "reason": "SNS_TOPIC_ARN not configured"}
+        return {"status": "error", "error": "SNS_TOPIC_ARN not configured"}
     try:
         response = sns.publish(
             TopicArn=SNS_TOPIC_ARN,
@@ -507,16 +517,22 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         decision = evaluate(detail)
         log_json("INFO", "Governance decision", decision=asdict(decision))
 
-        # 2) NOTIFY - always, regardless of the decision.
+        # 2) NOTIFY - attempt publication for every normal decision.
         alert = publish_sns_alert(
             "Cloud Security Automation Alert",
             build_alert_payload(detail, decision),
         )
-        if alert.get("status") == "error":
+        if alert.get("status") != "success":
             log_json("ERROR", "SNS alert failed - alert channel may be down",
                      sns_result=alert, control_id=decision.control_id)
+            # Publish before mutation: an alert failure must not cause a
+            # successful IAM change followed by an alert-driven replay.
+            raise RuntimeError("SNS notification failed; no IAM action attempted")
         else:
             log_json("INFO", "SNS alert processed", sns_result=alert)
+
+        if decision.action == "RETRY_REQUIRED":
+            raise RuntimeError("Exception lookup unavailable; no IAM action attempted")
 
         # 3) ACT - only on a REMEDIATE decision.
         if decision.action != "REMEDIATE":
@@ -545,12 +561,10 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                              decision, alert, remediation=result)
 
         log_json("ERROR", "Remediation failed", remediation_result=result)
-        return _response(500, "Remediation failed", decision, alert, remediation=result)
+        raise RuntimeError("IAM remediation failed; see structured remediation_result log")
 
     except Exception as exc:  # noqa: BLE001 - top-level safety net only
         log_json("ERROR", "Unhandled Lambda exception", error=str(exc))
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"message": "Unhandled exception",
-                                "error": str(exc), "dry_run": DRY_RUN}, default=str),
-        }
+        # EventBridge invokes asynchronously. Returning {statusCode: 500}
+        # is a normal return, so Lambda would not retry or route to the DLQ.
+        raise

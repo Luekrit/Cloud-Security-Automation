@@ -10,10 +10,9 @@ data "aws_caller_identity" "current" {}
 
 data "aws_partition" "current" {}
 
-data "aws_region" "current" {}
-
 locals {
   allowed_test_user_arn           = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:user/iam-test-*"
+  sns_topic_region                = var.sns_topic_arn != "" ? split(":", var.sns_topic_arn)[3] : ""
   administrator_access_policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AdministratorAccess"
 }
 
@@ -94,8 +93,8 @@ resource "aws_iam_role_policy" "lambda_remediation_policy" {
       # KMS - required to publish to a KMS-encrypted SNS topic. Without this,
       # sns:Publish fails authorization and the alert channel dies silently.
       # Scoped to SNS usage only via kms:ViaService so the role cannot use this
-      # key for arbitrary KMS operations. If a publish ever fails ON THE
-      # CONDITION during testing, remove the Condition block but keep Resource.
+      # key for arbitrary KMS operations. The region comes from the topic
+      # ARN because IAM is global and its provider may be in another region.
       var.sns_kms_key_arn != "" ? [
         {
           Sid    = "AllowUseOfSnsKmsKeyForPublishViaSns"
@@ -107,7 +106,7 @@ resource "aws_iam_role_policy" "lambda_remediation_policy" {
           Resource = var.sns_kms_key_arn
           Condition = {
             StringEquals = {
-              "kms:ViaService" = "sns.${data.aws_region.current.name}.amazonaws.com"
+              "kms:ViaService" = "sns.${local.sns_topic_region}.amazonaws.com"
             }
           }
         }

@@ -1,0 +1,14 @@
+{
+  "detail": {
+    "eventName": "AttachUserPolicy",
+    "eventSource": "iam.amazonaws.com",
+    "requestParameters": {
+      "userName": "production-user",
+      "policyArn": "arn:aws:iam::aws:policy/AdministratorAccess"
+    },
+    "userIdentity": {
+      "arn": "arn:aws:iam::123456789012:user/operator"
+    },
+    "recipientAccountId": "123456789012"
+  }
+}
