@@ -30,12 +30,20 @@ class RemediationTests(unittest.TestCase):
         self.iam = MagicMock()
         self.sns = MagicMock()
         self.sns.publish.return_value = {'MessageId': 'offline-message'}
+        self.securityhub = MagicMock()
+        self.securityhub.batch_import_findings.return_value = {
+            'SuccessCount': 1, 'FailedCount': 0, 'FailedFindings': []
+        }
         self.table = MagicMock()
         self.table.get_item.return_value = {}
         self.db = MagicMock()
         self.db.Table.return_value = self.table
         boto = types.ModuleType('boto3')
-        boto.client = lambda service, **kwargs: {'iam': self.iam, 'sns': self.sns}[service]
+        boto.client = lambda service, **kwargs: {
+            'iam': self.iam,
+            'sns': self.sns,
+            'securityhub': self.securityhub,
+        }[service]
         boto.resource = lambda service, **kwargs: self.db
         core = types.ModuleType('botocore')
         errors = types.ModuleType('botocore.exceptions')
@@ -45,6 +53,8 @@ class RemediationTests(unittest.TestCase):
             'DRY_RUN': 'true', 'EXCEPTION_TABLE_NAME': 'test-exceptions',
             'EXCEPTION_TABLE_REGION': 'us-east-1',
             'SNS_TOPIC_ARN': 'arn:aws:sns:us-east-1:123456789012:test-alerts',
+            'SECURITY_HUB_ENABLED': 'true',
+            'SECURITY_HUB_REGION': 'us-east-1',
         })
         self.env.start(); self.addCleanup(self.env.stop)
         self.sdk = patch.dict(sys.modules, {
@@ -67,8 +77,10 @@ class RemediationTests(unittest.TestCase):
         return module
 
     def event(self, actor='operator', target='iam-test-user', policy=POLICY):
-        return {'id': 'event-test-1', 'detail': {
+        return {'id': 'eventbridge-event-test-1', 'detail': {
             'eventName': 'AttachUserPolicy', 'eventSource': 'iam.amazonaws.com',
+            'eventID': 'cloudtrail-event-test-1',
+            'eventTime': '2026-09-30T12:00:00Z',
             'userIdentity': {'arn': 'arn:aws:iam::123456789012:user/' + actor},
             'requestParameters': {'userName': target, 'policyArn': policy},
             'recipientAccountId': '123456789012',
@@ -137,6 +149,101 @@ class RemediationTests(unittest.TestCase):
         payload = json.loads(self.sns.publish.call_args.kwargs['Message'])
         self.assertEqual(payload['exception_ticket_id'], 'SEC-123')
         self.iam.detach_user_policy.assert_not_called()
+
+    def test_actionable_detection_imports_minimum_asff_finding(self):
+        body = self.handle()
+        self.assertEqual(body['security_hub_result']['status'], 'success')
+        finding = self.securityhub.batch_import_findings.call_args.kwargs['Findings'][0]
+        product_arn = (
+            'arn:aws:securityhub:us-east-1:123456789012:'
+            'product/123456789012/default'
+        )
+        self.assertEqual(finding['SchemaVersion'], '2018-10-08')
+        self.assertEqual(finding['ProductArn'], product_arn)
+        self.assertEqual(
+            finding['Id'],
+            product_arn + '/cloud-security-automation/cloudtrail-event-test-1',
+        )
+        self.assertEqual(finding['AwsAccountId'], '123456789012')
+        self.assertEqual(finding['GeneratorId'], 'IAM_ADMIN_POLICY_ATTACHMENT')
+        self.assertEqual(finding['Severity']['Label'], 'HIGH')
+        self.assertEqual(finding['Types'], ['TTPs/Privilege Escalation'])
+        self.assertEqual(finding['FindingProviderFields']['Severity']['Label'], 'HIGH')
+        self.assertEqual(finding['Resources'][0]['Type'], 'AwsIamUser')
+        self.assertEqual(
+            finding['Resources'][0]['Id'],
+            'arn:aws:iam::123456789012:user/iam-test-user',
+        )
+        self.assertNotIn('Region', finding['Resources'][0])
+        self.assertEqual(finding['ProductFields']['governance-decision'], 'REMEDIATE')
+        self.assertEqual(finding['ProductFields']['dry-run'], 'true')
+        self.assertNotIn('exception_ticket_id', json.dumps(finding))
+        self.assertNotIn('exception_approved_by', json.dumps(finding))
+
+    def test_attach_self_fixture_can_publish_security_hub_finding(self):
+        fixture = SOURCE.parents[2] / 'tests' / 'fixtures' / 'attach-self.json'
+        event = json.loads(fixture.read_text())
+        body = self.handle(event)
+
+        self.assertEqual(body['decision'], 'REMEDIATE')
+        self.assertEqual(body['security_hub_result']['status'], 'success')
+        self.assertEqual(body['remediation_result']['status'], 'dry_run')
+        self.securityhub.batch_import_findings.assert_called_once()
+
+    def test_repeated_event_uses_stable_finding_id(self):
+        event = self.event()
+        self.handle(event)
+        first = self.securityhub.batch_import_findings.call_args.kwargs['Findings'][0]['Id']
+        self.handle(event)
+        second = self.securityhub.batch_import_findings.call_args.kwargs['Findings'][0]['Id']
+        self.assertEqual(first, second)
+
+    def test_approved_exception_is_reported_without_sensitive_metadata(self):
+        self.record()
+        body = self.handle()
+        self.assertEqual(body['decision'], 'SKIP_APPROVED')
+        finding = self.securityhub.batch_import_findings.call_args.kwargs['Findings'][0]
+        self.assertEqual(
+            finding['FindingProviderFields']['Severity']['Label'], 'INFORMATIONAL'
+        )
+        self.assertEqual(finding['ProductFields']['governance-decision'], 'SKIP_APPROVED')
+        serialized = json.dumps(finding)
+        self.assertNotIn('SEC-123', serialized)
+        self.assertNotIn('reviewer', serialized)
+
+    def test_no_action_does_not_create_security_hub_finding(self):
+        self.handle(self.event(policy='arn:aws:iam::aws:policy/ReadOnlyAccess'))
+        self.securityhub.batch_import_findings.assert_not_called()
+
+    def test_partial_import_failure_is_visible_but_does_not_change_decision(self):
+        self.securityhub.batch_import_findings.return_value = {
+            'SuccessCount': 0,
+            'FailedCount': 1,
+            'FailedFindings': [{
+                'Id': 'test-id', 'ErrorCode': 'InvalidInput',
+                'ErrorMessage': 'invalid finding',
+            }],
+        }
+        body = self.handle()
+        self.assertEqual(body['decision'], 'REMEDIATE')
+        self.assertEqual(body['remediation_result']['status'], 'dry_run')
+        self.assertEqual(body['security_hub_result']['status'], 'error')
+        self.iam.detach_user_policy.assert_not_called()
+
+    def test_security_hub_sdk_failure_is_non_blocking(self):
+        self.securityhub.batch_import_findings.side_effect = FakeClientError(
+            {'Error': {'Code': 'AccessDeniedException'}}
+        )
+        body = self.handle()
+        self.assertEqual(body['decision'], 'REMEDIATE')
+        self.assertEqual(body['security_hub_result']['status'], 'error')
+        self.assertEqual(body['remediation_result']['status'], 'dry_run')
+
+    def test_security_hub_feature_flag_skips_publish(self):
+        self.m.SECURITY_HUB_ENABLED = False
+        body = self.handle()
+        self.assertEqual(body['security_hub_result']['status'], 'skipped')
+        self.securityhub.batch_import_findings.assert_not_called()
 
     def test_expired_pending_revoked_records_do_not_approve(self):
         for overrides in [{'expires_at_epoch': 0}, {'status': 'PENDING'}, {'status': 'REVOKED'}]:

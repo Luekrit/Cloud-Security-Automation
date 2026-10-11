@@ -43,3 +43,9 @@ variable "lambda_dlq_arn" {
   type        = string
   default     = ""
 }
+
+variable "securityhub_product_arn" {
+  description = "Private default Security Hub product ARN for BatchImportFindings. Empty string disables the import grant."
+  type        = string
+  default     = ""
+}

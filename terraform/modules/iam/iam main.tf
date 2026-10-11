@@ -139,6 +139,19 @@ resource "aws_iam_role_policy" "lambda_remediation_policy" {
         }
       ] : [],
 
+      # Phase 5 Security Hub reporting. The runtime can only import findings
+      # through this account's private default product in the selected region.
+      var.securityhub_product_arn != "" ? [
+        {
+          Sid    = "AllowImportProjectSecurityHubFindings"
+          Effect = "Allow"
+          Action = [
+            "securityhub:BatchImportFindings"
+          ]
+          Resource = var.securityhub_product_arn
+        }
+      ] : [],
+
       # Extended live remediation for the new Phase 4 scenarios. Gated behind an
       # explicit flag so the CAPABILITY to delete does not exist until
       # deliberately enabled - defense in depth on top of the DRY_RUN env var.
