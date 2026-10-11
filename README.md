@@ -300,6 +300,31 @@ The tag mechanism was not retained as the final governance design. Its validatio
 
 **Outcome:** the first validated end-to-end IAM detection, SNS alerting, and dry-run decision pipeline.
 
+<details>
+<summary>Historical Phase 3 test evidence</summary>
+
+#### Evidence screenshots
+
+The following Phase 3 evidence demonstrates the original end-to-end detection and alerting pipeline. The IAM-tag exception visible in this historical test was superseded by DynamoDB governance in Phase 4.
+
+**Unapproved attachment: CloudWatch detection and dry-run decision**
+
+![Test A CloudWatch logs](diagrams/phase-3/01-test-a-cloudwatch-unapproved.png)
+
+**Unapproved attachment: SNS alert showing remediation approved**
+
+![Test A SNS alert](diagrams/phase-3/02-test-a-sns-remediation-approved.png)
+
+**Approved tag exception: CloudWatch decision evidence from Phase 3**
+
+![Test B CloudWatch logs](diagrams/phase-3/03-test-b-cloudwatch-approved-tag.png)
+
+**Approved tag exception: SNS alert showing skip decision**
+
+![Test B SNS alert](diagrams/phase-3/04-test-b-sns-skip-decision.png)
+
+</details>
+
 ### Phase 3.5: Terraform state and Lambda role hardening
 
 Phase 3.5 reduced operational and security risk before the governance model was expanded.
@@ -510,27 +535,24 @@ See the full validation and finding register:
 </details>
 
 <details>
-<summary>Historical Phase 3 test evidence</summary>
+<summary>Phase 5: Security Hub integration and validation</summary>
 
-## Historical validation evidence
+### Phase 5: centralized security findings
 
-The following Phase 3 evidence demonstrates the original end-to-end detection and alerting pipeline. The IAM-tag exception visible in this historical test was superseded by DynamoDB governance in Phase 4.
+Phase 5 added optional centralized reporting to AWS Security Hub without enabling live IAM remediation.
 
-**Unapproved attachment: CloudWatch detection and dry-run decision**
+- Published sanitized ASFF findings for `REMEDIATE` and `SKIP_APPROVED`.
+- Used stable finding IDs derived from CloudTrail event IDs to prevent duplicate Security Hub findings when an event is replayed.
+- Checked `FailedCount` and `FailedFindings` rather than assuming `BatchImportFindings` succeeded.
+- Limited Lambda to `securityhub:BatchImportFindings` on the account's private default product ARN.
+- Kept Security Hub failures visible but non-blocking to the governance decision.
+- Retained `DRY_RUN=true`.
 
-![Test A CloudWatch logs](diagrams/phase-3/01-test-a-cloudwatch-unapproved.png)
+**Validation:** The controlled AWS test created one `HIGH`, `ACTIVE`, `NEW` finding for `iam-test-user`. Replaying the same fixture left the finding count at one. All 37 offline tests passed, Terraform reported no post-deployment drift, and the approved-exception reporting path was covered through unit tests.
 
-**Unapproved attachment: SNS alert showing remediation approved**
+[Read the complete Phase 5 implementation and validation record](docs/phase-5-security-hub-integration.md)
 
-![Test A SNS alert](diagrams/phase-3/02-test-a-sns-remediation-approved.png)
-
-**Approved tag exception: CloudWatch decision evidence from Phase 3**
-
-![Test B CloudWatch logs](diagrams/phase-3/03-test-b-cloudwatch-approved-tag.png)
-
-**Approved tag exception: SNS alert showing skip decision**
-
-![Test B SNS alert](diagrams/phase-3/04-test-b-sns-skip-decision.png)
+**Outcome:** centralized, sanitized finding visibility was added without expanding remediation scope or exposing approval metadata.
 
 </details>
 
