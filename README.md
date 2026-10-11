@@ -2,13 +2,13 @@
 
 An AWS portfolio project that detects a high-risk IAM policy attachment, checks a governed exception, alerts an operator, and records a remediation decision before enforcement is enabled.
 
-> **Current status:** Phase 4.5 validation milestone complete · `DRY_RUN=true` · live IAM remediation disabled · Security Hub integration next
+> **Current status:** Phase 5 Security Hub integration complete · `DRY_RUN=true` · live IAM remediation disabled · controlled live remediation next
 
 ## Problem and current outcome
 
 An unexpected `AdministratorAccess` attachment can give an IAM user broad permissions. Periodic access reviews may discover the change late; unrestricted automatic removal can also disrupt legitimate work.
 
-This project evaluates the covered change through an event-driven workflow. Its tested path is **`AttachUserPolicy` for the AWS-managed `AdministratorAccess` policy**, using controlled IAM test users. Lambda checks a resource-and-control-specific DynamoDB exception, attempts an SNS notification, and logs the decision. In dry-run mode it records the intended detach without changing IAM permissions.
+This project evaluates the covered change through an event-driven workflow. Its tested path is **`AttachUserPolicy` for the AWS-managed `AdministratorAccess` policy**, using controlled IAM test users. Lambda checks a resource-and-control-specific DynamoDB exception, attempts an SNS notification, publishes a sanitized ASFF finding to AWS Security Hub, and records the remediation decision. In dry-run mode it records the intended detach without changing IAM permissions.
 
 The workflow flags a risky change; it does not establish that the account is compromised or reconstruct its full permission baseline.
 
@@ -18,9 +18,10 @@ The workflow flags a risky change; it does not establish that the account is com
 flowchart TB
     EVENT["IAM AdministratorAccess attachment"]
     EB["EventBridge: us-east-1"]
-    LAMBDA["Lambda: evaluate, notify, dry-run action"]
+    LAMBDA["Lambda: decide, notify, report, dry-run action"]
     DDB[("DynamoDB: scoped exceptions")]
     SNS["SNS: operator notification"]
+    SH["Security Hub: sanitized ASFF finding"]
     LOGS["CloudWatch: decision logs"]
     CT["Multi-Region CloudTrail"]
     AUDIT[("S3 and CloudWatch: encrypted audit logs")]
@@ -28,6 +29,7 @@ flowchart TB
     EB --> LAMBDA
     LAMBDA -->|"Read approval"| DDB
     LAMBDA --> SNS
+    LAMBDA --> SH
     LAMBDA --> LOGS
     EVENT --> CT
     CT --> AUDIT
@@ -44,6 +46,7 @@ The active IAM response path runs in `us-east-1`. The CloudTrail audit stack is 
 | Lambda has only `dynamodb:GetItem` on the exception table | Separate approval records from the responding workload |
 | Check approval expiry in code; use a separate TTL timestamp | Enforce validity independently from asynchronous record cleanup |
 | Separate notification from the exception decision | Retain visibility when an approved exception suppresses remediation |
+| Security Hub behind a feature flag with a product-scoped import grant | Add centralized reporting without enabling remediation or broad Security Hub access |
 
 Approval authoring is manual and out-of-band. Requester/approver separation is not yet programmatically enforced.
 
@@ -58,7 +61,7 @@ Documented development tests cover no exception, approved/unexpired, pending, ex
 
 Remaining findings are classified in the [Phase 4.5 validation register](docs/phase-4.5-security-validation.md). These are counts from different infrastructure snapshots, not a like-for-like pass-rate or production risk-reduction measurement. The register describes configuration checks and runtime validation; it does not establish that every application failure reaches the DLQ.
 
-**Boundary:** this is a single-account portfolio environment with one routed, validated control. Remaining validation and operational limitations are listed below; Phase 4.5 completion does not mean production readiness.
+**Boundary:** this is a single-account portfolio environment with one routed, validated control. Remaining validation and operational limitations are listed below; Phase 5 completion does not mean production readiness.
 
 ## Implemented scope versus tested coverage
 
@@ -69,7 +72,7 @@ Remaining findings are classified in the [Phase 4.5 validation register](docs/ph
 | `CreateAccessKey` | Yes | No | No | No |
 | `CreateLoginProfile` | Yes | No | No | No |
 
-The additional handlers demonstrate an extensible control registry, but they are not presented as live coverage. They will be routed and tested only after the first control completes Security Hub integration and controlled live-remediation validation.
+The additional handlers demonstrate an extensible control registry, but they are not presented as live coverage. Expansion remains future work after controlled live-remediation validation and CI/CD gates are completed for the first control.
 
 ## Key security capabilities
 
@@ -87,7 +90,8 @@ The execution order is deliberately:
 
 1. **Decide** whether the event is supported, risky, protected, or excepted. IAM permissions separately enforce the test-user mutation scope.
 2. **Notify** by attempting SNS publication regardless of the normal decision outcome.
-3. **Act** only when the decision is `REMEDIATE`; dry-run mode currently prevents the mutation.
+3. **Report** a sanitized ASFF finding for `REMEDIATE` or `SKIP_APPROVED` when Security Hub reporting is enabled.
+4. **Act** only when the decision is `REMEDIATE`; dry-run mode currently prevents the mutation.
 
 ### DynamoDB exception governance
 
@@ -129,6 +133,7 @@ Unexpected errors are logged and re-raised. SNS publication failures also raise 
 - Protected users return `NO_ACTION`.
 - Actor-equals-target events follow the same exception checks as other attachments; self-attachment does not grant an exemption.
 - Additional mutation permissions remain disabled behind `enable_extended_remediation=false`.
+- Security Hub reporting is disabled by default and requires `enable_security_hub=true`.
 - The Lambda cannot write exception approvals.
 
 ### Alerting and evidence
@@ -144,18 +149,39 @@ The current SNS payload includes:
 
 CloudWatch logs capture the governance decision, SNS result, dry-run action, remediation result, and unexpected errors as structured JSON.
 
+For `REMEDIATE` and `SKIP_APPROVED`, the optional Security Hub integration publishes a sanitized ASFF finding. Exception ticket IDs, approver identities, and the full DynamoDB record are deliberately excluded from the finding.
+
 ## Current limitations and work before live remediation
 
 - Only `AttachUserPolicy` with `AdministratorAccess` is routed and documented as validated end to end. Other handlers require routing, fixtures, permission review, and validation.
 - Live remediation remains disabled. Unit tests cover simulated IAM mutations; actual detachment in AWS remains a future validation step.
 - Application failures now raise errors so Lambda can apply its asynchronous retry and DLQ behavior. Runtime DLQ delivery remains unverified: the test invocation was accepted, but the CLI role lacked `sqs:ReceiveMessage` permission to inspect the queue.
-- Retries may produce duplicate notifications; persistent event deduplication is not implemented.
+- Stable finding IDs prevent duplicate Security Hub findings for the same event, but retries may still produce duplicate SNS notifications.
 - Development Terraform now passes the SNS KMS key ARN to the IAM module and derives the SNS service region from the topic ARN. Publishing succeeded in the existing environment; a fresh deployment has not been validated.
 - Approval authoring is manual. Requester/approver separation is not enforced by an approval workflow.
-- Remaining scanner findings are documented, not all resolved. Security Hub integration, CI/CD enforcement, recovery testing, and production monitoring remain future work.
+- Remaining scanner findings are documented, not all resolved. CI/CD enforcement, controlled live remediation, recovery testing, and production monitoring remain future work.
+- The live Phase 5 test invoked Lambda with a controlled fixture. The upstream CloudTrail and EventBridge path was validated in earlier phases rather than repeated during Phase 5.
 
 These remaining limitations are separate from the completed code fixes and successful dry-run validation.
 
+## Phase 5: AWS Security Hub integration
+
+Phase 5 adds centralized security reporting without enabling live IAM mutation. For an actionable `IAM_ADMIN_POLICY_ATTACHMENT` decision, Lambda publishes a sanitized AWS Security Finding Format finding to the account's private default Security Hub product in `us-east-1`.
+
+The deployed implementation:
+
+- publishes `REMEDIATE` and `SKIP_APPROVED` outcomes while excluding sensitive approval metadata;
+- assigns a stable finding ID from the CloudTrail event ID to prevent duplicate Security Hub findings;
+- checks `FailedCount` and `FailedFindings` instead of assuming the batch succeeded;
+- treats Security Hub failure as visible but non-blocking reporting failure;
+- grants only `securityhub:BatchImportFindings` on the account-specific product ARN;
+- keeps `DRY_RUN=true`, so the validated live finding does not detach the policy.
+
+The controlled AWS validation produced one `HIGH`, `ACTIVE`, `NEW` finding for `iam-test-user`. Replaying the same fixture left the finding count at one. The full regression suite passed **37 tests**, and the post-deployment Terraform plan reported no drift.
+
+![Security Hub custom finding](diagrams/Phase-5/Phase-5-01-security-hub-finding-list.png)
+
+[Read the complete Phase 5 implementation and validation record](docs/phase-5-security-hub-integration.md)
 
 ## Engineering decisions
 
@@ -198,8 +224,8 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 | 3.5 | Remote-state and Lambda least-privilege hardening | Complete |
 | 4 | Audit hardening and DynamoDB exception governance | **Complete** |
 | 4.5 | Checkov IaC gate and Prowler deployed-posture assessment | **Complete** |
-| 5 | AWS Security Hub integration using ASFF findings | **Next** |
-| 6 | Controlled live remediation | Planned |
+| 5 | AWS Security Hub integration using ASFF findings | **Complete** |
+| 6 | Controlled live remediation | **Next** |
 | 7 | CI/CD security and deployment gates | Planned |
 | 8 | AI-assisted triage with deterministic enforcement boundaries | Planned |
 
@@ -214,10 +240,12 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 | `terraform/modules/` | Reusable AWS infrastructure modules |
 | `diagrams/` | Architecture and validation evidence |
 | `tests/` | Mocked unit tests and event fixtures for regression and runtime validation |
+| `docs/phase-5-security-hub-integration.md` | Phase 5 design, deployment, validation results, limitations, and evidence |
+| `diagrams/Phase-5/` | Sanitized Phase 5 Security Hub and IAM evidence |
 
-## Project evolution: Phases 1–4.5
+## Project evolution: Phases 1–5
 
-The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, and Phase 4.5 security validation. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. Phases 5–8 remain future work in the roadmap.
+The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, security validation, and Security Hub ASFF reporting. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. Phases 6–8 remain future work in the roadmap.
 
 <details>
 <summary>Build history: Phases 1–3.5</summary>
@@ -506,9 +534,9 @@ The following Phase 3 evidence demonstrates the original end-to-end detection an
 
 </details>
 
-## Post-Phase 4.5 code-fix validation
+## Current code and runtime validation
 
-- All 29 unit tests passed using mocked AWS clients.
+- All 37 unit tests passed using mocked AWS clients.
 - Terraform initialization and validation succeeded.
 - Terraform applied two in-place updates: the Lambda code and its IAM policy, with no resources added or destroyed.
 - Lambda reported `Active`, `Successful`, and `DRY_RUN=true`.
@@ -518,19 +546,25 @@ The following Phase 3 evidence demonstrates the original end-to-end detection an
   - Self-attachment without an exception returns `REMEDIATE` with a dry-run action.
   - SNS accepted notifications for all three scenarios.
 - The asynchronous invalid-event invocation returned `202`; DLQ delivery remains unverified because queue inspection was denied.
+- The deployed Phase 5 Lambda published one `HIGH`, `ACTIVE`, `NEW` finding to Security Hub while remediation remained in dry-run mode.
+- Replaying the same event left the Security Hub finding count at one because the finding ID is stable.
+- A post-deployment Terraform plan reported no drift.
 
 These fixture invocations validate deployed Lambda behavior. They do not establish EventBridge delivery or actual IAM detachment. Earlier phase evidence documents the EventBridge path separately.
 
 ## Technologies
 
-Terraform, Python, Boto3, AWS IAM, CloudTrail, EventBridge, Lambda, DynamoDB, SNS, CloudWatch Logs, S3, KMS, and GitHub.
+Terraform, Python, Boto3, AWS IAM, CloudTrail, EventBridge, Lambda, DynamoDB, SNS, SQS, Security Hub, CloudWatch Logs, S3, KMS, Checkov, Prowler, and GitHub.
 
 ## Next milestone
 
-**Phase 5: AWS Security Hub integration**
+**Phase 6: Controlled live remediation**
 
-- Integrate the remediation workflow with AWS Security Hub using ASFF findings.
-- Add the minimum required `securityhub:BatchImportFindings` permission.
-- Publish controlled findings from the existing decision engine without changing remediation behavior.
-- Validate findings in Security Hub while keeping `DRY_RUN=true`.
-- Retain sanitized evidence showing the event, governance decision, alert, and Security Hub finding.
+- Create a disposable controlled IAM test user.
+- Confirm the user has no valid governed exception.
+- Set `DRY_RUN=false` only for the controlled test window.
+- Attach the AWS-managed `AdministratorAccess` policy.
+- Verify the exact expected user-policy attachment is removed.
+- Confirm SNS, CloudWatch and Security Hub evidence records the live outcome.
+- Restore `DRY_RUN=true` immediately after validation.
+- Document rollback, cleanup and safety evidence.

@@ -5,12 +5,16 @@ locals {
     ManagedBy   = "Terraform"
   }
 
-  cloudtrail_trail_name = "${var.project_name}-${var.environment}-trail"
+  cloudtrail_trail_name   = "${var.project_name}-${var.environment}-trail"
+  securityhub_region      = "us-east-1"
+  securityhub_product_arn = "arn:${data.aws_partition.current.partition}:securityhub:${local.securityhub_region}:${data.aws_caller_identity.current.account_id}:product/${data.aws_caller_identity.current.account_id}/default"
 }
 
 data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
+
+data "aws_partition" "current" {}
 
 # Resolve the existing AWS-managed SNS key in the topic's region.
 # This does not create a new customer-managed key or change topic encryption.
@@ -23,13 +27,14 @@ data "aws_kms_alias" "sns_global" {
 module "iam" {
   source = "../../modules/iam"
 
-  project_name        = var.project_name
-  environment         = var.environment
-  sns_topic_arn       = module.sns_global.topic_arn
-  sns_kms_key_arn     = data.aws_kms_alias.sns_global.target_key_arn
-  exception_table_arn = module.dynamodb_exceptions_global.table_arn
-  tags                = local.common_tags
-  lambda_dlq_arn      = aws_sqs_queue.remediation_dlq.arn
+  project_name            = var.project_name
+  environment             = var.environment
+  sns_topic_arn           = module.sns_global.topic_arn
+  sns_kms_key_arn         = data.aws_kms_alias.sns_global.target_key_arn
+  exception_table_arn     = module.dynamodb_exceptions_global.table_arn
+  tags                    = local.common_tags
+  lambda_dlq_arn          = aws_sqs_queue.remediation_dlq.arn
+  securityhub_product_arn = var.enable_security_hub ? local.securityhub_product_arn : ""
 }
 
 
@@ -233,6 +238,8 @@ module "lambda_global" {
     SNS_TOPIC_ARN          = module.sns_global.topic_arn
     EXCEPTION_TABLE_NAME   = module.dynamodb_exceptions_global.table_name
     EXCEPTION_TABLE_REGION = "us-east-1"
+    SECURITY_HUB_ENABLED   = tostring(var.enable_security_hub)
+    SECURITY_HUB_REGION    = local.securityhub_region
   }
 
   tags                   = merge(local.common_tags, { RegionScope = "global-us-east-1" })

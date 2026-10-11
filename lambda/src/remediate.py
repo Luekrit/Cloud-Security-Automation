@@ -29,6 +29,7 @@ import re
 import time
 import urllib.parse
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional
 
@@ -51,6 +52,12 @@ dynamodb = boto3.resource("dynamodb", region_name=EXCEPTION_TABLE_REGION)
 DRY_RUN = os.getenv("DRY_RUN", "true").strip().lower() != "false"
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN", "")
 EXCEPTION_TABLE_NAME = os.getenv("EXCEPTION_TABLE_NAME", "")
+SECURITY_HUB_ENABLED = os.getenv("SECURITY_HUB_ENABLED", "false").strip().lower() == "true"
+SECURITY_HUB_REGION = os.getenv(
+    "SECURITY_HUB_REGION",
+    os.getenv("AWS_REGION", "us-east-1"),
+)
+securityhub = boto3.client("securityhub", region_name=SECURITY_HUB_REGION)
 
 # Identities we will never auto-remediate against, regardless of approvals.
 # This is a guardrail against the automation locking out its own operators.
@@ -487,11 +494,113 @@ def publish_sns_alert(subject: str, message: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Report - Phase 5 Security Hub integration
+# ---------------------------------------------------------------------------
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def build_security_hub_finding(
+    event: Dict[str, Any], detail: Dict[str, Any], decision: Decision
+) -> Dict[str, Any]:
+    """Build one private-product ASFF finding for the validated IAM control."""
+    account_id = detail.get("recipientAccountId")
+    event_id = detail.get("eventID") or event.get("id")
+    if not account_id or not event_id or not decision.resource_name:
+        raise ValueError("Missing account, event, or resource identifier for ASFF finding")
+
+    product_arn = (
+        f"arn:aws:securityhub:{SECURITY_HUB_REGION}:{account_id}:"
+        f"product/{account_id}/default"
+    )
+    finding_id = f"{product_arn}/cloud-security-automation/{event_id}"
+    observed_at = detail.get("eventTime") or _utc_now()
+    policy_arn = get_nested(detail, ["requestParameters", "policyArn"], "")
+    severity = "INFORMATIONAL" if decision.action == "SKIP_APPROVED" else "HIGH"
+
+    return {
+        "SchemaVersion": "2018-10-08",
+        "Id": finding_id,
+        "ProductArn": product_arn,
+        "ProductName": "Cloud Security Automation and Remediation",
+        "CompanyName": "Luekrit Kongkamon",
+        "GeneratorId": decision.control_id or "IAM_ADMIN_POLICY_ATTACHMENT",
+        "AwsAccountId": account_id,
+        "CreatedAt": observed_at,
+        "UpdatedAt": _utc_now(),
+        "FirstObservedAt": observed_at,
+        "LastObservedAt": observed_at,
+        "Title": "AdministratorAccess attached to controlled IAM test user",
+        "Description": (
+            "CloudTrail detected the AWS-managed AdministratorAccess policy "
+            "being attached to a controlled iam-test-* user."
+        ),
+        # Keep the required top-level fields for ASFF validation and mirror the
+        # provider-owned values below. FindingProviderFields remains the source
+        # of truth for subsequent BatchImportFindings updates.
+        "Severity": {"Label": severity, "Original": severity},
+        "Types": ["TTPs/Privilege Escalation"],
+        "FindingProviderFields": {
+            "Severity": {"Label": severity, "Original": severity},
+            "Types": ["TTPs/Privilege Escalation"],
+        },
+        "Resources": [
+            {
+                "Type": "AwsIamUser",
+                "Id": f"arn:aws:iam::{account_id}:user/{decision.resource_name}",
+                "Partition": "aws",
+            }
+        ],
+        "ProductFields": {
+            "governance-decision": decision.action,
+            "dry-run": str(DRY_RUN).lower(),
+            "api-call": decision.event_name or "",
+            "policy-arn": policy_arn,
+        },
+        "RecordState": "ACTIVE",
+    }
+
+
+def publish_security_hub_finding(
+    event: Dict[str, Any], detail: Dict[str, Any], decision: Decision
+) -> Dict[str, Any]:
+    """Publish one finding without changing the governance/remediation outcome."""
+    if not SECURITY_HUB_ENABLED:
+        return {"status": "skipped", "reason": "Security Hub integration disabled"}
+    if decision.action not in {"REMEDIATE", "SKIP_APPROVED"}:
+        return {"status": "skipped", "reason": "Decision is not a risky detection"}
+    if decision.event_name != "AttachUserPolicy" or decision.control_id != "IAM_ADMIN_POLICY_ATTACHMENT":
+        return {"status": "skipped", "reason": "Control not enabled for Phase 5 reporting"}
+
+    try:
+        finding = build_security_hub_finding(event, detail, decision)
+        response = securityhub.batch_import_findings(Findings=[finding])
+        failed_count = response.get("FailedCount", 0)
+        failed_findings = response.get("FailedFindings", [])
+        if failed_count or failed_findings:
+            return {
+                "status": "error",
+                "finding_id": finding["Id"],
+                "failed_count": failed_count,
+                "failed_findings": failed_findings,
+            }
+        return {
+            "status": "success",
+            "finding_id": finding["Id"],
+            "success_count": response.get("SuccessCount", 0),
+        }
+    except (ClientError, BotoCoreError, ValueError) as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
 # Act
 # ---------------------------------------------------------------------------
 
 def _response(status: int, message: str, decision: Decision,
-              alert: Dict[str, Any], remediation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+              alert: Dict[str, Any], security_hub_result: Dict[str, Any],
+              remediation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     body = {
         "message": message,
         "decision": decision.action,
@@ -500,6 +609,7 @@ def _response(status: int, message: str, decision: Decision,
         "resource": decision.resource_name,
         "dry_run": DRY_RUN,
         "sns_result": alert,
+        "security_hub_result": security_hub_result,
     }
     if remediation is not None:
         body["remediation_result"] = remediation
@@ -534,11 +644,23 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if decision.action == "RETRY_REQUIRED":
             raise RuntimeError("Exception lookup unavailable; no IAM action attempted")
 
-        # 3) ACT - only on a REMEDIATE decision.
+        # 3) REPORT - reporting-only. Failure is logged but never changes the
+        # governance decision and never enables, suppresses, or retries IAM work.
+        security_hub_result = publish_security_hub_finding(event, detail, decision)
+        if security_hub_result.get("status") == "error":
+            log_json("ERROR", "Security Hub finding import failed",
+                     security_hub_result=security_hub_result,
+                     control_id=decision.control_id)
+        else:
+            log_json("INFO", "Security Hub finding processed",
+                     security_hub_result=security_hub_result)
+
+        # 4) ACT - only on a REMEDIATE decision.
         if decision.action != "REMEDIATE":
             log_json("INFO", "No remediation performed", reason=decision.reason,
                      decision=decision.action)
-            return _response(200, "No remediation required", decision, alert)
+            return _response(200, "No remediation required", decision, alert,
+                             security_hub_result)
 
         if DRY_RUN:
             simulated = {
@@ -550,7 +672,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             log_json("INFO", "Dry run enabled - remediation skipped",
                      remediation_result=simulated)
             return _response(200, "Dry run only - remediation skipped",
-                             decision, alert, remediation=simulated)
+                             decision, alert, security_hub_result,
+                             remediation=simulated)
 
         handler = CONTROL_REGISTRY[decision.event_name]
         result = handler.remediate(decision.target)
@@ -558,7 +681,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if result.get("status") == "success":
             log_json("INFO", "Remediation completed", remediation_result=result)
             return _response(200, "Remediation completed successfully",
-                             decision, alert, remediation=result)
+                             decision, alert, security_hub_result,
+                             remediation=result)
 
         log_json("ERROR", "Remediation failed", remediation_result=result)
         raise RuntimeError("IAM remediation failed; see structured remediation_result log")

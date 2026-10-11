@@ -28,6 +28,12 @@ variable "event_names" {
 }
 
 variable "alert_email" {
-  description = "novemberluekrit2537@outlook.com"
+  description = "Email address subscribed to the SNS security alerts topic"
   type        = string
+}
+
+variable "enable_security_hub" {
+  description = "Enables Phase 5 ASFF publishing and its least-privilege runtime permission. Security Hub must already be enabled in us-east-1."
+  type        = bool
+  default     = false
 }
