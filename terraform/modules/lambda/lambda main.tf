@@ -33,10 +33,10 @@ resource "aws_lambda_function" "remediation_lambda" {
 
   environment {
     variables = merge(
+      var.environment_variables,
       {
         DRY_RUN = tostring(var.dry_run)
-      },
-      var.environment_variables
+      }
     )
   }
   tags = var.tags
