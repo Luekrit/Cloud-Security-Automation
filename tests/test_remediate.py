@@ -81,7 +81,7 @@ class RemediationTests(unittest.TestCase):
         return {'id': 'eventbridge-event-test-1', 'detail': {
             'eventName': 'AttachUserPolicy', 'eventSource': 'iam.amazonaws.com',
             'eventID': 'cloudtrail-event-test-1',
-            'eventTime': '2026-09-30T12:00:00Z',
+            'eventTime': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time())),
             'userIdentity': {'arn': 'arn:aws:iam::123456789012:user/' + actor},
             'requestParameters': {'userName': target, 'policyArn': policy},
             'recipientAccountId': '123456789012',
@@ -354,6 +354,43 @@ class RemediationTests(unittest.TestCase):
                 self.assertEqual(body['decision'], 'REMEDIATE')
                 self.assertEqual(body['remediation_result']['status'], 'blocked')
                 self.iam.detach_user_policy.assert_not_called()
+
+    def test_invalid_stale_or_future_live_events_never_detach(self):
+        self.m.DRY_RUN = False
+        now = 1800000000
+        cases = [None, '', 'bad-date', 123, '2026-09-30T12:00:00']
+        cases += [
+            time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now + offset))
+            for offset in (-900, -901, 61)
+        ]
+
+        with patch.object(self.m.time, 'time', return_value=now):
+            for raw_time in cases:
+                with self.subTest(event_time=raw_time):
+                    event = self.event()
+                    event['detail']['eventTime'] = raw_time
+                    body = self.handle(event)
+
+                    self.assertEqual(body['decision'], 'REMEDIATE')
+                    self.assertEqual(body['remediation_result']['status'], 'blocked')
+                    self.iam.detach_user_policy.assert_not_called()
+
+    def test_fresh_live_events_allow_only_expected_detach(self):
+        self.m.DRY_RUN = False
+        now = 1800000000
+
+        with patch.object(self.m.time, 'time', return_value=now):
+            for offset in (-899, 0, 60):
+                with self.subTest(offset=offset):
+                    self.iam.detach_user_policy.reset_mock()
+                    event = self.event()
+                    event['detail']['eventTime'] = time.strftime(
+                        '%Y-%m-%dT%H:%M:%SZ', time.gmtime(now + offset))
+                    body = self.handle(event)
+
+                    self.assertEqual(body['remediation_result']['status'], 'success')
+                    self.iam.detach_user_policy.assert_called_once_with(
+                        UserName='iam-test-user', PolicyArn=POLICY)
 
     def test_live_iam_failure_raises(self):
         self.m.DRY_RUN = False

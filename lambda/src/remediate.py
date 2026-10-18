@@ -617,6 +617,26 @@ def _response(status: int, message: str, decision: Decision,
     return {"statusCode": status, "body": json.dumps(body, default=str)}
 
 
+def live_event_block_reason(detail: Dict[str, Any]) -> Optional[str]:
+    raw_time = detail.get("eventTime")
+    if not isinstance(raw_time, str):
+        return "Missing or invalid eventTime"
+
+    try:
+        event_time = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+        if event_time.utcoffset() is None:
+            return "eventTime must include a timezone"
+        age_seconds = time.time() - event_time.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return "Invalid eventTime"
+
+    if age_seconds < -60:
+        return "eventTime is more than 60 seconds in the future"
+    if age_seconds >= 900:
+        return "eventTime is at least 15 minutes old"
+    return None
+
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     log_json("INFO", "Detection triggered", dry_run=DRY_RUN, raw_event=event,
              request_id=getattr(context, "aws_request_id", None))
@@ -686,6 +706,20 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             log_json("WARNING", "Live remediation blocked by target guard",
                      remediation_result=blocked)
             return _response(200, "Live remediation blocked by target guard",
+                             decision, alert, security_hub_result,
+                             remediation=blocked)
+
+        freshness_reason = live_event_block_reason(detail)
+        if freshness_reason:
+            blocked = {
+                "status": "blocked",
+                "reason": freshness_reason,
+                "control_id": decision.control_id,
+                "resource": decision.resource_name,
+            }
+            log_json("WARNING", "Live remediation blocked by event freshness guard",
+                     remediation_result=blocked)
+            return _response(200, "Live remediation blocked by event freshness guard",
                              decision, alert, security_hub_result,
                              remediation=blocked)
 
