@@ -235,6 +235,7 @@ module "lambda_global" {
   lambda_source_path = "../../../lambda/src/remediate.py"
 
   environment_variables = {
+    LIVE_REMEDIATION_USER  = var.live_remediation_user
     SNS_TOPIC_ARN          = module.sns_global.topic_arn
     EXCEPTION_TABLE_NAME   = module.dynamodb_exceptions_global.table_name
     EXCEPTION_TABLE_REGION = "us-east-1"

@@ -43,3 +43,9 @@ variable "remediation_dry_run" {
   type        = bool
   default     = true
 }
+
+variable "live_remediation_user" {
+  description = "Exact disposable IAM username allowed for controlled live remediation. Empty keeps live remediation unarmed."
+  type        = string
+  default     = ""
+}
