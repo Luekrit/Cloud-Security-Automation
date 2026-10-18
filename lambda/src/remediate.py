@@ -50,6 +50,7 @@ dynamodb = boto3.resource("dynamodb", region_name=EXCEPTION_TABLE_REGION)
 
 # Only an explicit "false" enables mutations. Typos must keep dry-run on.
 DRY_RUN = os.getenv("DRY_RUN", "true").strip().lower() != "false"
+LIVE_REMEDIATION_USER = os.getenv("LIVE_REMEDIATION_USER", "").strip()
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN", "")
 EXCEPTION_TABLE_NAME = os.getenv("EXCEPTION_TABLE_NAME", "")
 SECURITY_HUB_ENABLED = os.getenv("SECURITY_HUB_ENABLED", "false").strip().lower() == "true"
@@ -674,6 +675,19 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             return _response(200, "Dry run only - remediation skipped",
                              decision, alert, security_hub_result,
                              remediation=simulated)
+
+        if not LIVE_REMEDIATION_USER or decision.resource_name != LIVE_REMEDIATION_USER:
+            blocked = {
+                "status": "blocked",
+                "reason": "Live remediation requires an exact configured test-user match",
+                "control_id": decision.control_id,
+                "resource": decision.resource_name,
+            }
+            log_json("WARNING", "Live remediation blocked by target guard",
+                     remediation_result=blocked)
+            return _response(200, "Live remediation blocked by target guard",
+                             decision, alert, security_hub_result,
+                             remediation=blocked)
 
         handler = CONTROL_REGISTRY[decision.event_name]
         result = handler.remediate(decision.target)

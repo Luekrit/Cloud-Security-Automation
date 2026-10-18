@@ -51,6 +51,7 @@ class RemediationTests(unittest.TestCase):
         errors.BotoCoreError = FakeBotoCoreError
         self.env = patch.dict(os.environ, {
             'DRY_RUN': 'true', 'EXCEPTION_TABLE_NAME': 'test-exceptions',
+            'LIVE_REMEDIATION_USER': 'iam-test-user',
             'EXCEPTION_TABLE_REGION': 'us-east-1',
             'SNS_TOPIC_ARN': 'arn:aws:sns:us-east-1:123456789012:test-alerts',
             'SECURITY_HUB_ENABLED': 'true',
@@ -328,6 +329,31 @@ class RemediationTests(unittest.TestCase):
         self.m.SNS_TOPIC_ARN = ''
         with self.assertRaisesRegex(RuntimeError, 'SNS notification failed'):
             self.handle()
+
+    def test_missing_or_blank_live_target_blocks_mutation(self):
+        for setting in (None, '', '   '):
+            with self.subTest(setting=setting), patch.dict(os.environ, {'DRY_RUN': 'false'}):
+                if setting is None:
+                    os.environ.pop('LIVE_REMEDIATION_USER', None)
+                else:
+                    os.environ['LIVE_REMEDIATION_USER'] = setting
+
+                module = self.load()
+                body = json.loads(module.lambda_handler(self.event(), None)['body'])
+
+                self.assertEqual(body['decision'], 'REMEDIATE')
+                self.assertEqual(body['remediation_result']['status'], 'blocked')
+                self.iam.detach_user_policy.assert_not_called()
+
+    def test_live_target_requires_exact_username_match(self):
+        self.m.DRY_RUN = False
+        for target in ('iam-test-user-extra', 'iam-test-other'):
+            with self.subTest(target=target):
+                body = self.handle(self.event(target=target))
+
+                self.assertEqual(body['decision'], 'REMEDIATE')
+                self.assertEqual(body['remediation_result']['status'], 'blocked')
+                self.iam.detach_user_policy.assert_not_called()
 
     def test_live_iam_failure_raises(self):
         self.m.DRY_RUN = False
