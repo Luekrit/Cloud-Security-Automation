@@ -35,6 +35,7 @@ module "iam" {
   tags                    = local.common_tags
   lambda_dlq_arn          = aws_sqs_queue.remediation_dlq.arn
   securityhub_product_arn = var.enable_security_hub ? local.securityhub_product_arn : ""
+  action_ledger_table_arn = aws_dynamodb_table.remediation_actions.arn
 }
 
 
@@ -235,12 +236,14 @@ module "lambda_global" {
   lambda_source_path = "../../../lambda/src/remediate.py"
 
   environment_variables = {
-    LIVE_REMEDIATION_USER  = var.live_remediation_user
-    SNS_TOPIC_ARN          = module.sns_global.topic_arn
-    EXCEPTION_TABLE_NAME   = module.dynamodb_exceptions_global.table_name
-    EXCEPTION_TABLE_REGION = "us-east-1"
-    SECURITY_HUB_ENABLED   = tostring(var.enable_security_hub)
-    SECURITY_HUB_REGION    = local.securityhub_region
+    LIVE_REMEDIATION_USER      = var.live_remediation_user
+    SNS_TOPIC_ARN              = module.sns_global.topic_arn
+    EXCEPTION_TABLE_NAME       = module.dynamodb_exceptions_global.table_name
+    EXCEPTION_TABLE_REGION     = "us-east-1"
+    SECURITY_HUB_ENABLED       = tostring(var.enable_security_hub)
+    SECURITY_HUB_REGION        = local.securityhub_region
+    ACTION_LEDGER_TABLE_NAME   = aws_dynamodb_table.remediation_actions.name
+    ACTION_LEDGER_TABLE_REGION = "us-east-1"
   }
 
   tags                   = merge(local.common_tags, { RegionScope = "global-us-east-1" })
@@ -297,5 +300,36 @@ module "dynamodb_exceptions_global" {
   tags = merge(local.common_tags, {
     RegionScope = "global-us-east-1"
     Phase       = "Phase 4"
+  })
+}
+
+resource "aws_dynamodb_table" "remediation_actions" {
+  provider = aws.global
+
+  name         = "${var.project_name}-${var.environment}-remediation-actions"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "action_key"
+
+  attribute {
+    name = "action_key"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl_delete_at_epoch"
+    enabled        = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = merge(local.common_tags, {
+    RegionScope = "global-us-east-1"
+    Purpose     = "Controlled remediation action ledger"
   })
 }
