@@ -541,6 +541,102 @@ class RemediationTests(unittest.TestCase):
         self.ledger.delete_item.assert_not_called()
         self.iam.detach_user_policy.assert_not_called()
 
+    def test_live_handler_claims_then_detaches_then_completes(self):
+        self.m.DRY_RUN = False
+        sequence = MagicMock()
+        sequence.attach_mock(self.ledger.put_item, 'claim')
+        sequence.attach_mock(self.iam.detach_user_policy, 'detach')
+        sequence.attach_mock(self.ledger.update_item, 'complete')
+
+        self.assertEqual(self.handle()['remediation_result']['status'], 'success')
+        self.assertEqual([call[0] for call in sequence.mock_calls],
+                         ['claim', 'detach', 'complete'])
+        self.table.put_item.assert_not_called()
+        self.table.update_item.assert_not_called()
+
+    def test_completed_event_replay_does_not_detach_again(self):
+        self.m.DRY_RUN = False
+        event = self.event()
+        self.assertEqual(self.handle(event)['remediation_result']['status'], 'success')
+
+        record = dict(self.ledger.put_item.call_args.kwargs['Item'], status='COMPLETED')
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException'}})
+        self.ledger.get_item.return_value = {'Item': record}
+
+        replay = dict(event, id='different-eventbridge-delivery')
+        self.assertEqual(self.handle(replay)['remediation_result']['status'], 'duplicate')
+        self.iam.detach_user_policy.assert_called_once_with(
+            UserName='iam-test-user', PolicyArn=POLICY)
+        self.assertEqual(self.ledger.update_item.call_count, 1)
+
+    def test_uncertain_iam_outcome_does_not_get_automatically_retried(self):
+        self.m.DRY_RUN = False
+        event = self.event()
+        self.iam.detach_user_policy.side_effect = FakeBotoCoreError('timeout')
+
+        with self.assertRaises(FakeBotoCoreError):
+            self.handle(event)
+
+        record = self.ledger.put_item.call_args.kwargs['Item']
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException'}})
+        self.ledger.get_item.return_value = {'Item': record}
+        self.iam.detach_user_policy.side_effect = None
+
+        self.assertEqual(self.handle(event)['remediation_result']['status'], 'blocked')
+        self.assertEqual(self.iam.detach_user_policy.call_count, 1)
+        self.ledger.update_item.assert_not_called()
+
+    def test_uncertain_completion_does_not_repeat_iam_action(self):
+        self.m.DRY_RUN = False
+        event = self.event()
+        self.ledger.update_item.side_effect = FakeBotoCoreError('response lost')
+
+        with self.assertRaisesRegex(RuntimeError, 'completion uncertain'):
+            self.handle(event)
+
+        record = self.ledger.put_item.call_args.kwargs['Item']
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException'}})
+        self.ledger.update_item.side_effect = None
+
+        for state, expected in [('IN_PROGRESS', 'blocked'), ('COMPLETED', 'duplicate')]:
+            with self.subTest(state=state):
+                self.ledger.get_item.return_value = {'Item': dict(record, status=state)}
+                self.assertEqual(self.handle(event)['remediation_result']['status'], expected)
+
+        self.assertEqual(self.iam.detach_user_policy.call_count, 1)
+        self.assertEqual(self.ledger.update_item.call_count, 1)
+
+    def test_handler_ledger_failure_prevents_iam_action(self):
+        self.m.DRY_RUN = False
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'AccessDeniedException'}})
+
+        with self.assertRaisesRegex(RuntimeError, 'Action ledger claim failed'):
+            self.handle()
+
+        self.iam.detach_user_policy.assert_not_called()
+        self.ledger.update_item.assert_not_called()
+
+    def test_safe_paths_do_not_write_action_ledger(self):
+        self.assertEqual(self.handle()['remediation_result']['status'], 'dry_run')
+        self.m.DRY_RUN = False
+        self.assertEqual(self.handle(self.event(target='production-user'))['decision'], 'NO_ACTION')
+        self.assertEqual(self.handle(self.event(target='iam-test-other'))[
+            'remediation_result']['status'], 'blocked')
+
+        stale = self.event()
+        stale['detail']['eventTime'] = '2000-01-01T00:00:00Z'
+        self.assertEqual(self.handle(stale)['remediation_result']['status'], 'blocked')
+
+        self.record()
+        self.assertEqual(self.handle()['decision'], 'SKIP_APPROVED')
+        self.ledger.put_item.assert_not_called()
+        self.ledger.update_item.assert_not_called()
+        self.iam.detach_user_policy.assert_not_called()
+
     def test_live_iam_failure_raises(self):
         self.m.DRY_RUN = False
         self.iam.detach_user_policy.side_effect = FakeClientError({'Error': {'Code': 'AccessDenied'}})
@@ -553,10 +649,12 @@ class RemediationTests(unittest.TestCase):
         self.iam.detach_user_policy.assert_called_once_with(UserName='iam-test-user', PolicyArn=POLICY)
 
     def test_repeated_detach_of_absent_target_is_no_op(self):
-        self.m.DRY_RUN = False
-        self.iam.detach_user_policy.side_effect = [None, FakeClientError({'Error': {'Code': 'NoSuchEntity'}})]
-        self.assertEqual(self.handle()['remediation_result']['status'], 'success')
-        result = self.handle()['remediation_result']
+        parsed = self.m.parse_attach_user_policy(self.event()['detail'])
+        self.iam.detach_user_policy.side_effect = [
+            None, FakeClientError({'Error': {'Code': 'NoSuchEntity'}}),
+        ]
+        self.assertEqual(self.m.remediate_attach_user_policy(parsed)['status'], 'success')
+        result = self.m.remediate_attach_user_policy(parsed)
         self.assertEqual(result['status'], 'success')
         self.assertEqual(result['outcome'], 'target_already_absent')
 

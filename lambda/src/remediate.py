@@ -831,10 +831,19 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                              decision, alert, security_hub_result,
                              remediation=blocked)
 
+        claim = claim_live_action(detail, decision)
+        if claim.get("status") != "claimed":
+            log_json("WARNING", "Live action skipped by ledger",
+                     remediation_result=claim)
+            return _response(200, "Live action skipped by ledger",
+                             decision, alert, security_hub_result,
+                             remediation=claim)
+
         handler = CONTROL_REGISTRY[decision.event_name]
         result = handler.remediate(decision.target)
 
         if result.get("status") == "success":
+            complete_live_action(claim, result)
             log_json("INFO", "Remediation completed", remediation_result=result)
             return _response(200, "Remediation completed successfully",
                              decision, alert, security_hub_result,
