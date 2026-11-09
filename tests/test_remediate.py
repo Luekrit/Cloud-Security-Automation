@@ -36,8 +36,15 @@ class RemediationTests(unittest.TestCase):
         }
         self.table = MagicMock()
         self.table.get_item.return_value = {}
+
+        self.ledger = MagicMock()
+        self.ledger.get_item.return_value = {}
+
         self.db = MagicMock()
-        self.db.Table.return_value = self.table
+        self.db.Table.side_effect = lambda name: {
+            'test-exceptions': self.table,
+            'test-actions': self.ledger,
+        }[name]
         boto = types.ModuleType('boto3')
         boto.client = lambda service, **kwargs: {
             'iam': self.iam,
@@ -51,10 +58,13 @@ class RemediationTests(unittest.TestCase):
         errors.BotoCoreError = FakeBotoCoreError
         self.env = patch.dict(os.environ, {
             'DRY_RUN': 'true', 'EXCEPTION_TABLE_NAME': 'test-exceptions',
+            'LIVE_REMEDIATION_USER': 'iam-test-user',
             'EXCEPTION_TABLE_REGION': 'us-east-1',
             'SNS_TOPIC_ARN': 'arn:aws:sns:us-east-1:123456789012:test-alerts',
             'SECURITY_HUB_ENABLED': 'true',
             'SECURITY_HUB_REGION': 'us-east-1',
+            'ACTION_LEDGER_TABLE_NAME': 'test-actions',
+            'ACTION_LEDGER_TABLE_REGION': 'us-east-1',
         })
         self.env.start(); self.addCleanup(self.env.stop)
         self.sdk = patch.dict(sys.modules, {
@@ -80,7 +90,7 @@ class RemediationTests(unittest.TestCase):
         return {'id': 'eventbridge-event-test-1', 'detail': {
             'eventName': 'AttachUserPolicy', 'eventSource': 'iam.amazonaws.com',
             'eventID': 'cloudtrail-event-test-1',
-            'eventTime': '2026-09-30T12:00:00Z',
+            'eventTime': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time())),
             'userIdentity': {'arn': 'arn:aws:iam::123456789012:user/' + actor},
             'requestParameters': {'userName': target, 'policyArn': policy},
             'recipientAccountId': '123456789012',
@@ -329,6 +339,304 @@ class RemediationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'SNS notification failed'):
             self.handle()
 
+    def test_missing_or_blank_live_target_blocks_mutation(self):
+        for setting in (None, '', '   '):
+            with self.subTest(setting=setting), patch.dict(os.environ, {'DRY_RUN': 'false'}):
+                if setting is None:
+                    os.environ.pop('LIVE_REMEDIATION_USER', None)
+                else:
+                    os.environ['LIVE_REMEDIATION_USER'] = setting
+
+                module = self.load()
+                body = json.loads(module.lambda_handler(self.event(), None)['body'])
+
+                self.assertEqual(body['decision'], 'REMEDIATE')
+                self.assertEqual(body['remediation_result']['status'], 'blocked')
+                self.iam.detach_user_policy.assert_not_called()
+
+    def test_live_target_requires_exact_username_match(self):
+        self.m.DRY_RUN = False
+        for target in ('iam-test-user-extra', 'iam-test-other'):
+            with self.subTest(target=target):
+                body = self.handle(self.event(target=target))
+
+                self.assertEqual(body['decision'], 'REMEDIATE')
+                self.assertEqual(body['remediation_result']['status'], 'blocked')
+                self.iam.detach_user_policy.assert_not_called()
+
+    def test_invalid_stale_or_future_live_events_never_detach(self):
+        self.m.DRY_RUN = False
+        now = 1800000000
+        cases = [None, '', 'bad-date', 123, '2026-09-30T12:00:00']
+        cases += [
+            time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now + offset))
+            for offset in (-900, -901, 61)
+        ]
+
+        with patch.object(self.m.time, 'time', return_value=now):
+            for raw_time in cases:
+                with self.subTest(event_time=raw_time):
+                    event = self.event()
+                    event['detail']['eventTime'] = raw_time
+                    body = self.handle(event)
+
+                    self.assertEqual(body['decision'], 'REMEDIATE')
+                    self.assertEqual(body['remediation_result']['status'], 'blocked')
+                    self.iam.detach_user_policy.assert_not_called()
+
+    def test_fresh_live_events_allow_only_expected_detach(self):
+        self.m.DRY_RUN = False
+        now = 1800000000
+
+        with patch.object(self.m.time, 'time', return_value=now):
+            for offset in (-899, 0, 60):
+                with self.subTest(offset=offset):
+                    self.iam.detach_user_policy.reset_mock()
+                    event = self.event()
+                    event['detail']['eventTime'] = time.strftime(
+                        '%Y-%m-%dT%H:%M:%SZ', time.gmtime(now + offset))
+                    body = self.handle(event)
+
+                    self.assertEqual(body['remediation_result']['status'], 'success')
+                    self.iam.detach_user_policy.assert_called_once_with(
+                        UserName='iam-test-user', PolicyArn=POLICY)
+
+    def test_action_claim_uses_conditional_write_and_separate_table(self):
+        event = self.event()
+        with patch.object(self.m.time, 'time', return_value=1800000000):
+            claim = self.m.claim_live_action(event['detail'], self.decision(event))
+
+        self.assertEqual(claim['status'], 'claimed')
+        args = self.ledger.put_item.call_args.kwargs
+        self.assertEqual(args['ConditionExpression'], 'attribute_not_exists(action_key)')
+        self.assertEqual(args['Item']['status'], 'IN_PROGRESS')
+        self.assertEqual(args['Item']['owner_token'], claim['owner_token'])
+        self.assertEqual(args['Item']['ttl_delete_at_epoch'], 1800086400)
+        self.table.put_item.assert_not_called()
+        self.iam.detach_user_policy.assert_not_called()
+
+    def test_existing_action_claims_are_never_reclaimed(self):
+        event = self.event()
+        decision = self.decision(event)
+        self.m.claim_live_action(event['detail'], decision)
+        record = self.ledger.put_item.call_args.kwargs['Item']
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException'}})
+
+        for state, expected in [('IN_PROGRESS', 'blocked'), ('COMPLETED', 'duplicate'),
+                                ('UNKNOWN', 'blocked')]:
+            with self.subTest(state=state):
+                self.ledger.get_item.return_value = {'Item': dict(record, status=state)}
+                result = self.m.claim_live_action(event['detail'], decision)
+                self.assertEqual(result['status'], expected)
+                self.ledger.get_item.assert_called_with(
+                    Key={'action_key': record['action_key']}, ConsistentRead=True)
+
+        changed = dict(record, status='COMPLETED', scope={})
+        self.ledger.get_item.return_value = {'Item': changed}
+        self.assertEqual(self.m.claim_live_action(event['detail'], decision)['status'], 'blocked')
+        self.ledger.update_item.assert_not_called()
+        self.ledger.delete_item.assert_not_called()
+        self.iam.detach_user_policy.assert_not_called()
+
+    def test_action_claim_requires_configuration_and_event_identity(self):
+        event = self.event()
+        decision = self.decision(event)
+
+        with patch.object(self.m, 'ACTION_LEDGER_TABLE_NAME', ''):
+            with self.assertRaisesRegex(RuntimeError, 'Action ledger not configured'):
+                self.m.claim_live_action(event['detail'], decision)
+
+        for field in ('eventID', 'recipientAccountId'):
+            with self.subTest(field=field):
+                detail = dict(event['detail'])
+                detail.pop(field)
+                self.assertEqual(self.m.claim_live_action(detail, decision)['status'], 'blocked')
+
+        self.ledger.put_item.assert_not_called()
+        self.iam.detach_user_policy.assert_not_called()
+
+    def test_action_ledger_errors_never_become_successful_claims(self):
+        event = self.event()
+        decision = self.decision(event)
+        failures = [FakeClientError({'Error': {'Code': 'AccessDeniedException'}}),
+                    FakeBotoCoreError('timeout')]
+
+        for failure in failures:
+            with self.subTest(stage='put', failure=type(failure).__name__):
+                self.ledger.put_item.side_effect = failure
+                with self.assertRaisesRegex(RuntimeError, 'Action ledger'):
+                    self.m.claim_live_action(event['detail'], decision)
+
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException'}})
+
+        for failure in failures:
+            with self.subTest(stage='get', failure=type(failure).__name__):
+                self.ledger.get_item.side_effect = failure
+                with self.assertRaisesRegex(RuntimeError, 'Action ledger'):
+                    self.m.claim_live_action(event['detail'], decision)
+
+        self.iam.detach_user_policy.assert_not_called()
+
+    def test_action_completion_requires_owned_in_progress_record(self):
+        event = self.event()
+        claim = self.m.claim_live_action(event['detail'], self.decision(event))
+        result = {
+            'status': 'success',
+            'action': 'detach_user_policy',
+            'user_name': 'iam-test-user',
+            'policy_arn': POLICY,
+        }
+
+        self.m.complete_live_action(claim, result)
+
+        self.ledger.update_item.assert_called_once()
+        args = self.ledger.update_item.call_args.kwargs
+        self.assertEqual(args['Key'], {'action_key': claim['action_key']})
+        self.assertEqual(
+            args['ConditionExpression'],
+            'attribute_exists(action_key) AND #status = :in_progress '
+            'AND owner_token = :owner',
+        )
+        values = args['ExpressionAttributeValues']
+        self.assertEqual(values[':owner'], claim['owner_token'])
+        self.assertEqual(values[':in_progress'], 'IN_PROGRESS')
+        self.assertEqual(values[':completed'], 'COMPLETED')
+        self.assertEqual(values[':result'], result)
+        self.table.update_item.assert_not_called()
+        self.iam.detach_user_policy.assert_not_called()
+
+    def test_action_completion_rejects_invalid_inputs(self):
+        event = self.event()
+        claim = self.m.claim_live_action(event['detail'], self.decision(event))
+
+        with self.assertRaises(RuntimeError):
+            self.m.complete_live_action({}, {'status': 'success'})
+
+        with self.assertRaises(RuntimeError):
+            self.m.complete_live_action(claim, {'status': 'error'})
+
+        with patch.object(self.m, 'ACTION_LEDGER_TABLE_NAME', ''):
+            with self.assertRaises(RuntimeError):
+                self.m.complete_live_action(claim, {'status': 'success'})
+
+        self.ledger.update_item.assert_not_called()
+
+    def test_action_completion_failure_never_reclaims_or_deletes(self):
+        event = self.event()
+        claim = self.m.claim_live_action(event['detail'], self.decision(event))
+        failures = [
+            FakeClientError({'Error': {'Code': 'ConditionalCheckFailedException'}}),
+            FakeBotoCoreError('timeout'),
+        ]
+
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                self.ledger.update_item.side_effect = failure
+                with self.assertRaisesRegex(RuntimeError, 'completion uncertain'):
+                    self.m.complete_live_action(claim, {'status': 'success'})
+
+        self.assertEqual(self.ledger.put_item.call_count, 1)
+        self.ledger.delete_item.assert_not_called()
+        self.iam.detach_user_policy.assert_not_called()
+
+    def test_live_handler_claims_then_detaches_then_completes(self):
+        self.m.DRY_RUN = False
+        sequence = MagicMock()
+        sequence.attach_mock(self.ledger.put_item, 'claim')
+        sequence.attach_mock(self.iam.detach_user_policy, 'detach')
+        sequence.attach_mock(self.ledger.update_item, 'complete')
+
+        self.assertEqual(self.handle()['remediation_result']['status'], 'success')
+        self.assertEqual([call[0] for call in sequence.mock_calls],
+                         ['claim', 'detach', 'complete'])
+        self.table.put_item.assert_not_called()
+        self.table.update_item.assert_not_called()
+
+    def test_completed_event_replay_does_not_detach_again(self):
+        self.m.DRY_RUN = False
+        event = self.event()
+        self.assertEqual(self.handle(event)['remediation_result']['status'], 'success')
+
+        record = dict(self.ledger.put_item.call_args.kwargs['Item'], status='COMPLETED')
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException'}})
+        self.ledger.get_item.return_value = {'Item': record}
+
+        replay = dict(event, id='different-eventbridge-delivery')
+        self.assertEqual(self.handle(replay)['remediation_result']['status'], 'duplicate')
+        self.iam.detach_user_policy.assert_called_once_with(
+            UserName='iam-test-user', PolicyArn=POLICY)
+        self.assertEqual(self.ledger.update_item.call_count, 1)
+
+    def test_uncertain_iam_outcome_does_not_get_automatically_retried(self):
+        self.m.DRY_RUN = False
+        event = self.event()
+        self.iam.detach_user_policy.side_effect = FakeBotoCoreError('timeout')
+
+        with self.assertRaises(FakeBotoCoreError):
+            self.handle(event)
+
+        record = self.ledger.put_item.call_args.kwargs['Item']
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException'}})
+        self.ledger.get_item.return_value = {'Item': record}
+        self.iam.detach_user_policy.side_effect = None
+
+        self.assertEqual(self.handle(event)['remediation_result']['status'], 'blocked')
+        self.assertEqual(self.iam.detach_user_policy.call_count, 1)
+        self.ledger.update_item.assert_not_called()
+
+    def test_uncertain_completion_does_not_repeat_iam_action(self):
+        self.m.DRY_RUN = False
+        event = self.event()
+        self.ledger.update_item.side_effect = FakeBotoCoreError('response lost')
+
+        with self.assertRaisesRegex(RuntimeError, 'completion uncertain'):
+            self.handle(event)
+
+        record = self.ledger.put_item.call_args.kwargs['Item']
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException'}})
+        self.ledger.update_item.side_effect = None
+
+        for state, expected in [('IN_PROGRESS', 'blocked'), ('COMPLETED', 'duplicate')]:
+            with self.subTest(state=state):
+                self.ledger.get_item.return_value = {'Item': dict(record, status=state)}
+                self.assertEqual(self.handle(event)['remediation_result']['status'], expected)
+
+        self.assertEqual(self.iam.detach_user_policy.call_count, 1)
+        self.assertEqual(self.ledger.update_item.call_count, 1)
+
+    def test_handler_ledger_failure_prevents_iam_action(self):
+        self.m.DRY_RUN = False
+        self.ledger.put_item.side_effect = FakeClientError(
+            {'Error': {'Code': 'AccessDeniedException'}})
+
+        with self.assertRaisesRegex(RuntimeError, 'Action ledger claim failed'):
+            self.handle()
+
+        self.iam.detach_user_policy.assert_not_called()
+        self.ledger.update_item.assert_not_called()
+
+    def test_safe_paths_do_not_write_action_ledger(self):
+        self.assertEqual(self.handle()['remediation_result']['status'], 'dry_run')
+        self.m.DRY_RUN = False
+        self.assertEqual(self.handle(self.event(target='production-user'))['decision'], 'NO_ACTION')
+        self.assertEqual(self.handle(self.event(target='iam-test-other'))[
+            'remediation_result']['status'], 'blocked')
+
+        stale = self.event()
+        stale['detail']['eventTime'] = '2000-01-01T00:00:00Z'
+        self.assertEqual(self.handle(stale)['remediation_result']['status'], 'blocked')
+
+        self.record()
+        self.assertEqual(self.handle()['decision'], 'SKIP_APPROVED')
+        self.ledger.put_item.assert_not_called()
+        self.ledger.update_item.assert_not_called()
+        self.iam.detach_user_policy.assert_not_called()
+
     def test_live_iam_failure_raises(self):
         self.m.DRY_RUN = False
         self.iam.detach_user_policy.side_effect = FakeClientError({'Error': {'Code': 'AccessDenied'}})
@@ -341,10 +649,12 @@ class RemediationTests(unittest.TestCase):
         self.iam.detach_user_policy.assert_called_once_with(UserName='iam-test-user', PolicyArn=POLICY)
 
     def test_repeated_detach_of_absent_target_is_no_op(self):
-        self.m.DRY_RUN = False
-        self.iam.detach_user_policy.side_effect = [None, FakeClientError({'Error': {'Code': 'NoSuchEntity'}})]
-        self.assertEqual(self.handle()['remediation_result']['status'], 'success')
-        result = self.handle()['remediation_result']
+        parsed = self.m.parse_attach_user_policy(self.event()['detail'])
+        self.iam.detach_user_policy.side_effect = [
+            None, FakeClientError({'Error': {'Code': 'NoSuchEntity'}}),
+        ]
+        self.assertEqual(self.m.remediate_attach_user_policy(parsed)['status'], 'success')
+        result = self.m.remediate_attach_user_policy(parsed)
         self.assertEqual(result['status'], 'success')
         self.assertEqual(result['outcome'], 'target_already_absent')
 

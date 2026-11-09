@@ -28,6 +28,7 @@ import os
 import re
 import time
 import urllib.parse
+import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -50,6 +51,7 @@ dynamodb = boto3.resource("dynamodb", region_name=EXCEPTION_TABLE_REGION)
 
 # Only an explicit "false" enables mutations. Typos must keep dry-run on.
 DRY_RUN = os.getenv("DRY_RUN", "true").strip().lower() != "false"
+LIVE_REMEDIATION_USER = os.getenv("LIVE_REMEDIATION_USER", "").strip()
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN", "")
 EXCEPTION_TABLE_NAME = os.getenv("EXCEPTION_TABLE_NAME", "")
 SECURITY_HUB_ENABLED = os.getenv("SECURITY_HUB_ENABLED", "false").strip().lower() == "true"
@@ -58,6 +60,12 @@ SECURITY_HUB_REGION = os.getenv(
     os.getenv("AWS_REGION", "us-east-1"),
 )
 securityhub = boto3.client("securityhub", region_name=SECURITY_HUB_REGION)
+
+ACTION_LEDGER_TABLE_NAME = os.getenv("ACTION_LEDGER_TABLE_NAME", "").strip()
+ACTION_LEDGER_TABLE_REGION = os.getenv("ACTION_LEDGER_TABLE_REGION", "us-east-1")
+action_ledger_dynamodb = boto3.resource(
+    "dynamodb", region_name=ACTION_LEDGER_TABLE_REGION,
+)
 
 # Identities we will never auto-remediate against, regardless of approvals.
 # This is a guardrail against the automation locking out its own operators.
@@ -615,6 +623,127 @@ def _response(status: int, message: str, decision: Decision,
         body["remediation_result"] = remediation
     return {"statusCode": status, "body": json.dumps(body, default=str)}
 
+def claim_live_action(detail: Dict[str, Any], decision: Decision) -> Dict[str, Any]:
+    """Claim once. Never replace a record or infer success from its age."""
+    if not ACTION_LEDGER_TABLE_NAME:
+        raise RuntimeError("Action ledger not configured; no IAM action permitted")
+
+    target = decision.target or {}
+    if (decision.event_name != "AttachUserPolicy"
+            or decision.control_id != "IAM_ADMIN_POLICY_ATTACHMENT"
+            or detail.get("eventSource") != "iam.amazonaws.com"
+            or target.get("policy_arn") != "arn:aws:iam::aws:policy/AdministratorAccess"):
+        return {"status": "blocked", "reason": "Action outside Phase 6 scope"}
+
+    account = detail.get("recipientAccountId")
+    event_id = detail.get("eventID")
+    if (not isinstance(account, str) or not re.fullmatch(r"[0-9]{12}", account)
+            or not isinstance(event_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9-]{1,128}", event_id)):
+        return {"status": "blocked", "reason": "Missing or invalid CloudTrail event identity"}
+
+    action_key = f"{account}#{decision.control_id}#{event_id}"
+    scope = {
+        "resource": decision.resource_name,
+        "policy_arn": target["policy_arn"],
+        "event_time": detail.get("eventTime"),
+    }
+    owner = uuid.uuid4().hex
+    now = int(time.time())
+    table = action_ledger_dynamodb.Table(ACTION_LEDGER_TABLE_NAME)
+    item = {
+        "action_key": action_key,
+        "owner_token": owner,
+        "status": "IN_PROGRESS",
+        "scope": scope,
+        "created_at_epoch": now,
+        "ttl_delete_at_epoch": now + 86400,
+    }
+
+    try:
+        table.put_item(Item=item, ConditionExpression="attribute_not_exists(action_key)")
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise RuntimeError("Action ledger claim failed; no IAM action permitted") from exc
+    except BotoCoreError as exc:
+        raise RuntimeError("Action ledger claim uncertain; no IAM action permitted") from exc
+    else:
+        return {"status": "claimed", "action_key": action_key, "owner_token": owner}
+
+    try:
+        previous = table.get_item(
+            Key={"action_key": action_key}, ConsistentRead=True,
+        ).get("Item")
+    except (ClientError, BotoCoreError) as exc:
+        raise RuntimeError("Action ledger lookup failed; no IAM action permitted") from exc
+
+    if not isinstance(previous, dict) or previous.get("scope") != scope:
+        return {"status": "blocked", "action_key": action_key,
+                "reason": "Existing ledger record missing or action scope differs"}
+    if previous.get("status") == "COMPLETED":
+        return {"status": "duplicate", "action_key": action_key,
+                "reason": "Action already completed"}
+    return {"status": "blocked", "action_key": action_key,
+            "reason": "Existing claim incomplete; operator reconciliation required"}
+
+def complete_live_action(claim: Dict[str, Any], result: Dict[str, Any]) -> None:
+    if not ACTION_LEDGER_TABLE_NAME:
+        raise RuntimeError("Action ledger not configured; completion cannot be recorded")
+
+    if (claim.get("status") != "claimed"
+            or not isinstance(claim.get("action_key"), str) or not claim["action_key"]
+            or not isinstance(claim.get("owner_token"), str) or not claim["owner_token"]):
+        raise RuntimeError("Cannot complete an action without an owned claim")
+
+    if result.get("status") != "success":
+        raise RuntimeError("Cannot complete an unsuccessful IAM action")
+
+    try:
+        action_ledger_dynamodb.Table(ACTION_LEDGER_TABLE_NAME).update_item(
+            Key={"action_key": claim["action_key"]},
+            UpdateExpression=(
+                "SET #status = :completed, completed_at_epoch = :now, #result = :result"
+            ),
+            ConditionExpression=(
+                "attribute_exists(action_key) AND #status = :in_progress "
+                "AND owner_token = :owner"
+            ),
+            ExpressionAttributeNames={
+                "#status": "status",
+                "#result": "result",
+            },
+            ExpressionAttributeValues={
+                ":completed": "COMPLETED",
+                ":in_progress": "IN_PROGRESS",
+                ":owner": claim["owner_token"],
+                ":now": int(time.time()),
+                ":result": result,
+            },
+        )
+    except (ClientError, BotoCoreError) as exc:
+        raise RuntimeError(
+            "Action ledger completion uncertain; operator reconciliation required"
+        ) from exc
+
+def live_event_block_reason(detail: Dict[str, Any]) -> Optional[str]:
+    raw_time = detail.get("eventTime")
+    if not isinstance(raw_time, str):
+        return "Missing or invalid eventTime"
+
+    try:
+        event_time = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+        if event_time.utcoffset() is None:
+            return "eventTime must include a timezone"
+        age_seconds = time.time() - event_time.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return "Invalid eventTime"
+
+    if age_seconds < -60:
+        return "eventTime is more than 60 seconds in the future"
+    if age_seconds >= 900:
+        return "eventTime is at least 15 minutes old"
+    return None
+
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     log_json("INFO", "Detection triggered", dry_run=DRY_RUN, raw_event=event,
@@ -675,10 +804,46 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                              decision, alert, security_hub_result,
                              remediation=simulated)
 
+        if not LIVE_REMEDIATION_USER or decision.resource_name != LIVE_REMEDIATION_USER:
+            blocked = {
+                "status": "blocked",
+                "reason": "Live remediation requires an exact configured test-user match",
+                "control_id": decision.control_id,
+                "resource": decision.resource_name,
+            }
+            log_json("WARNING", "Live remediation blocked by target guard",
+                     remediation_result=blocked)
+            return _response(200, "Live remediation blocked by target guard",
+                             decision, alert, security_hub_result,
+                             remediation=blocked)
+
+        freshness_reason = live_event_block_reason(detail)
+        if freshness_reason:
+            blocked = {
+                "status": "blocked",
+                "reason": freshness_reason,
+                "control_id": decision.control_id,
+                "resource": decision.resource_name,
+            }
+            log_json("WARNING", "Live remediation blocked by event freshness guard",
+                     remediation_result=blocked)
+            return _response(200, "Live remediation blocked by event freshness guard",
+                             decision, alert, security_hub_result,
+                             remediation=blocked)
+
+        claim = claim_live_action(detail, decision)
+        if claim.get("status") != "claimed":
+            log_json("WARNING", "Live action skipped by ledger",
+                     remediation_result=claim)
+            return _response(200, "Live action skipped by ledger",
+                             decision, alert, security_hub_result,
+                             remediation=claim)
+
         handler = CONTROL_REGISTRY[decision.event_name]
         result = handler.remediate(decision.target)
 
         if result.get("status") == "success":
+            complete_live_action(claim, result)
             log_json("INFO", "Remediation completed", remediation_result=result)
             return _response(200, "Remediation completed successfully",
                              decision, alert, security_hub_result,

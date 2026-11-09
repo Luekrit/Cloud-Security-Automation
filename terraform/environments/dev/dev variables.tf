@@ -37,3 +37,15 @@ variable "enable_security_hub" {
   type        = bool
   default     = false
 }
+
+variable "remediation_dry_run" {
+  description = "Keep remediation in dry-run mode unless a controlled live test is explicitly enabled."
+  type        = bool
+  default     = true
+}
+
+variable "live_remediation_user" {
+  description = "Exact disposable IAM username allowed for controlled live remediation. Empty keeps live remediation unarmed."
+  type        = string
+  default     = ""
+}

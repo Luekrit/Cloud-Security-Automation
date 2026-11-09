@@ -49,3 +49,9 @@ variable "securityhub_product_arn" {
   type        = string
   default     = ""
 }
+
+variable "action_ledger_table_arn" {
+  description = "ARN of the separate remediation action ledger. Empty disables its runtime permissions."
+  type        = string
+  default     = ""
+}

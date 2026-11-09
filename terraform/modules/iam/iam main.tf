@@ -126,6 +126,20 @@ resource "aws_iam_role_policy" "lambda_remediation_policy" {
         }
       ] : [],
 
+      # Separate action ledger: never grants writes to exception approvals.
+      var.action_ledger_table_arn != "" ? [
+        {
+          Sid    = "AllowUseOfRemediationActionLedger"
+          Effect = "Allow"
+          Action = [
+            "dynamodb:GetItem",
+            "dynamodb:PutItem",
+            "dynamodb:UpdateItem"
+          ]
+          Resource = var.action_ledger_table_arn
+        }
+      ] : [],
+
       # SQS DLQ - allows Lambda to send failed asynchronous invocation records
       # only to the dedicated remediation dead-letter queue.
       var.lambda_dlq_arn != "" ? [
