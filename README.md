@@ -156,15 +156,13 @@ For `REMEDIATE` and `SKIP_APPROVED`, the optional Security Hub integration publi
 ## Current limitations
 
 - Only `AttachUserPolicy` with `AdministratorAccess` is routed and documented as validated end to end. Other handlers require routing, fixtures, permission review, and validation.
-- Live remediation is currently disabled. Phase 6 validated one controlled detachment; deployed replay and recovery were not exercised in that run.
+- Live remediation is currently disabled. Phase 6 validated one live detachment through CloudTrail → EventBridge → Lambda, then restored `DRY_RUN=true` and cleared the live target. Duplicate-event replay and failure recovery were not tested in the deployed environment.
 - Application failures now raise errors so Lambda can apply its asynchronous retry and DLQ behavior. Runtime DLQ delivery remains unverified: the test invocation was accepted, but the CLI role lacked `sqs:ReceiveMessage` permission to inspect the queue.
 - Stable finding IDs prevent duplicate Security Hub findings for the same event, but retries may still produce duplicate SNS notifications.
 - Development Terraform now passes the SNS KMS key ARN to the IAM module and derives the SNS service region from the topic ARN. Publishing succeeded in the existing environment; a fresh deployment has not been validated.
 - Approval authoring is manual. Requester/approver separation is not enforced by an approval workflow.
 - Remaining scanner findings are documented, not all resolved. CI/CD enforcement, recovery testing, and production monitoring remain future work.
-- The live Phase 5 test invoked Lambda with a controlled fixture. The upstream CloudTrail and EventBridge path was validated in earlier phases rather than repeated during Phase 5.
 
-These remaining limitations are separate from the completed code fixes and successful dry-run validation.
 
 ## Phase 5: AWS Security Hub integration
 
@@ -247,7 +245,7 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 
 ## Project evolution: Phases 1–5
 
-The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, security validation, and Security Hub ASFF reporting. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. Phases 6–8 remain future work in the roadmap.
+The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, security validation, and Security Hub ASFF reporting. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. See the [Phase 6 validation record](docs/phase-6-controlled-live-remediation.md) for the controlled live remediation test. Phases 7 and 8 are the remaining roadmap milestones.
 
 <details>
 <summary>Build history: Phases 1–3.5</summary>
