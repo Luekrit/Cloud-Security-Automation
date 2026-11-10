@@ -1,0 +1,84 @@
+name: Terraform dev plan
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: terraform-dev-plan
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan dev
+    if: github.repository == 'Luekrit/Cloud-Security-Automation' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: terraform-plan-dev
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: terraform/environments/dev
+    env:
+      TF_IN_AUTOMATION: "true"
+
+    steps:
+      - name: Check out the dispatched commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "1.14.3"
+          terraform_wrapper: false
+
+      - name: Assume the AWS plan role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          aws-region: ap-southeast-2
+          mask-aws-account-id: true
+
+      - name: Initialize the dev backend
+        run: terraform init -input=false -lockfile=readonly -no-color
+
+      - name: Run the dev plan
+        env:
+          TF_VAR_aws_region: ap-southeast-2
+          TF_VAR_project_name: cloud-security-automation
+          TF_VAR_environment: dev
+          TF_VAR_alert_email: ${{ secrets.TF_ALERT_EMAIL }}
+        run: |
+          : "${TF_VAR_alert_email:?Set TF_ALERT_EMAIL in terraform-plan-dev}"
+
+          plan_log="$(mktemp)"
+          trap 'rm -f "$plan_log"' EXIT
+
+          status=0
+          terraform plan -input=false -lock-timeout=60s -detailed-exitcode -json \
+            -var='enable_security_hub=true' \
+            -var='remediation_dry_run=true' \
+            -var='live_remediation_user=' \
+            >"$plan_log" 2>&1 || status=$?
+
+          case "$status" in
+            0)
+              echo "Terraform dev plan completed with no changes." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            2)
+              echo "Terraform dev plan found changes that need review." >> "$GITHUB_STEP_SUMMARY"
+              exit 2
+              ;;
+            *)
+              echo "Terraform dev plan failed." >> "$GITHUB_STEP_SUMMARY"
+              jq -Rr 'fromjson? | select(.type == "diagnostic") | .diagnostic.summary | @json' "$plan_log"
+              exit "$status"
+              ;;
+          esac
