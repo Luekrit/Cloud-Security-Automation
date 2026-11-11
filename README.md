@@ -2,7 +2,7 @@
 
 An AWS portfolio project that detects a high-risk IAM policy attachment, checks a governed exception, alerts an operator, and can remove the attachment during a controlled live test.
 
-> **Current status:** Phase 6 controlled live remediation validated · `DRY_RUN=true` restored · Phase 7 CI/CD gates next
+>  **Current status:** Phase 6 controlled live remediation validated · `DRY_RUN=true` restored · Phase 7 CI checks and protected dev plan verified
 
 ## Problem and current outcome
 
@@ -245,7 +245,7 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 
 ## Project evolution: Phases 1–5
 
-The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, security validation, and Security Hub ASFF reporting. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. See the [Phase 6 validation record](docs/phase-6-controlled-live-remediation.md) for the controlled live remediation test. Phases 7 and 8 are the remaining roadmap milestones.
+The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, security validation, and Security Hub ASFF reporting. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. See the [Phase 6 validation record](docs/phase-6-controlled-live-remediation.md) for the controlled live remediation test. Phase 7 CI and dev plan results are documented below. Automated IaC scanning and Phase 8 remain on the roadmap.
 
 <details>
 <summary>Build history: Phases 1–3.5</summary>
@@ -591,8 +591,20 @@ the restored inputs.
 
 [Read the Phase 6 implementation, validation, and evidence](docs/phase-6-controlled-live-remediation.md)
 
-## Next milestone
+## Phase 7 — CI checks and protected Terraform plan
 
-**Phase 7: CI/CD security and deployment gates.** Add automated tests, Terraform
-validation and plan review, and IaC scanning. Keep routine deployments in dry-run
-mode and treat live remediation as a separate, explicitly controlled test.
+GitHub Actions runs Python regression tests and Terraform validation for pull
+requests and pushes to `main`. The manually triggered dev plan runs from
+`main` and uses GitHub OIDC to assume a dedicated AWS plan role. Deployment
+requires a separate manual apply of a reviewed plan.
+
+The Windows and Linux builds initially produced different Lambda ZIP hashes.
+Normalizing the Python source to LF and setting the ZIP entry permissions to
+`0644` made the hashes match. After deploying the matching package, AWS
+confirmed `DRY_RUN=true` and an empty live remediation target. Terraform dev
+plan #7 on `main` at commit `0641df6` completed with no proposed changes.
+
+- [CI validation run #3](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/42647317871)
+- [Terraform dev plan run #7](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/43004069488)
+
+Automated IaC scanning in GitHub Actions is pending.
