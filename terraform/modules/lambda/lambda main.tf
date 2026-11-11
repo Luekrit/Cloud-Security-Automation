@@ -10,9 +10,10 @@ terraform {
   }
 }
 data "archive_file" "lambda_zip" {
-  type        = "zip"
-  source_file = var.lambda_source_path
-  output_path = "${path.module}/lambda.zip"
+  type             = "zip"
+  source_file      = var.lambda_source_path
+  output_path      = "${path.module}/lambda.zip"
+  output_file_mode = "0644"
 }
 
 resource "aws_lambda_function" "remediation_lambda" {
