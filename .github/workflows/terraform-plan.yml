@@ -74,6 +74,7 @@ jobs:
               ;;
             2)
               echo "Terraform dev plan found changes that need review." >> "$GITHUB_STEP_SUMMARY"
+              jq -Rr 'fromjson? | select(.type == "planned_change" or .type == "resource_drift") | [.type, .change.action, .change.resource.resource_type, .change.resource.resource_name] | @tsv' "$plan_log"
               exit 2
               ;;
             *)
