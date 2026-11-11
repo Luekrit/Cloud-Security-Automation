@@ -58,11 +58,14 @@ jobs:
         run: |
           : "${TF_VAR_alert_email:?Set TF_ALERT_EMAIL in terraform-plan-dev}"
 
-          plan_log="$(mktemp)"
-          trap 'rm -f "$plan_log"' EXIT
+          plan_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$plan_dir"' EXIT
+          plan_log="$plan_dir/plan.log"
+          plan_file="$plan_dir/dev.tfplan"
 
           status=0
           terraform plan -input=false -lock-timeout=60s -detailed-exitcode -json \
+            -out="$plan_file" \
             -var='enable_security_hub=true' \
             -var='remediation_dry_run=true' \
             -var='live_remediation_user=' \
@@ -75,6 +78,23 @@ jobs:
             2)
               echo "Terraform dev plan found changes that need review." >> "$GITHUB_STEP_SUMMARY"
               jq -Rr 'fromjson? | select(.type == "planned_change" or .type == "resource_drift") | [.type, .change.action, .change.resource.resource_type, .change.resource.resource_name] | @tsv' "$plan_log"
+              if ! terraform show -json "$plan_file" | jq -r '
+                .resource_changes[]
+                | select(.address == "module.lambda_global.aws_lambda_function.remediation_lambda")
+                | select(.change.actions != ["no-op"])
+                | .change as $change
+                | (($change.before // {}) + ($change.after // {}) + ($change.after_unknown // {}) | keys) as $keys
+                | "Changed Lambda fields: \(
+                    [$keys[] as $key
+                     | select($change.before[$key] != $change.after[$key]
+                              or $change.after_unknown[$key] == true)
+                     | $key] | join(", ")
+                  )",
+                  "Prior Terraform source_code_hash: \($change.before.source_code_hash // "unavailable")",
+                  "Planned source_code_hash: \($change.after.source_code_hash // "unavailable")"
+              '; then
+                echo "Could not inspect the saved plan for Lambda changes."
+              fi
               exit 2
               ;;
             *)
