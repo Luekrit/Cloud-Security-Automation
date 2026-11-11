@@ -179,6 +179,25 @@ The deployed implementation:
 
 The controlled AWS validation produced one `HIGH`, `ACTIVE`, `NEW` finding for `iam-test-user`. Replaying the same fixture left the finding count at one. The full regression suite passed **37 tests**, and the post-deployment Terraform plan reported no drift.
 
+### Code and runtime validation
+
+- Unit tests also covered the approved-exception reporting path.
+- All 37 unit tests passed using mocked AWS clients.
+- Terraform initialization and validation succeeded.
+- Terraform applied two in-place updates: the Lambda code and its IAM policy, with no resources added or destroyed.
+- Lambda reported `Active`, `Successful`, and `DRY_RUN=true`.
+- Direct Lambda fixture invocations confirmed:
+  - Unsupported events return `NO_ACTION`.
+  - Targets outside `iam-test-*` return `NO_ACTION`.
+  - Self-attachment without an exception returns `REMEDIATE` with a dry-run action.
+  - SNS accepted notifications for all three scenarios.
+- The asynchronous invalid-event invocation returned `202`; DLQ delivery remains unverified because queue inspection was denied.
+- The deployed Phase 5 Lambda published one `HIGH`, `ACTIVE`, `NEW` finding to Security Hub while remediation remained in dry-run mode.
+- Replaying the same event left the Security Hub finding count at one because the finding ID is stable.
+- A post-deployment Terraform plan reported no drift.
+
+These fixture invocations validate deployed Lambda behavior. They do not establish EventBridge delivery or actual IAM detachment. Earlier phase evidence documents the EventBridge path separately.
+
 ![Security Hub custom finding](diagrams/Phase-5/Phase-5-01-security-hub-finding-list.png)
 
 [Read the complete Phase 5 implementation and validation record](docs/phase-5-security-hub-integration.md)
@@ -226,7 +245,7 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 | 4.5 | Checkov IaC gate and Prowler deployed-posture assessment | **Complete** |
 | 5 | AWS Security Hub integration using ASFF findings | **Complete** |
 | 6 | Controlled live remediation | **Complete (lab validation)** |
-| 7 | CI/CD security and deployment gates | **Next** |
+| 7 | CI checks, protected Terraform plan, and automated IaC scanning | CI and plan verified. Automated scanning pending. |
 | 8 | AI-assisted triage with deterministic enforcement boundaries | Planned |
 
 ## Repository structure
@@ -243,7 +262,7 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 | `docs/phase-5-security-hub-integration.md` | Phase 5 design, deployment, validation results, limitations, and evidence |
 | `diagrams/Phase-5/` | Sanitized Phase 5 Security Hub and IAM evidence |
 
-## Project evolution: Phases 1–5
+## Project evolution: Phases 1–4.5
 
 The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, security validation, and Security Hub ASFF reporting. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. See the [Phase 6 validation record](docs/phase-6-controlled-live-remediation.md) for the controlled live remediation test. Phase 7 CI and dev plan results are documented below. Automated IaC scanning and Phase 8 remain on the roadmap.
 
@@ -534,46 +553,6 @@ See the full validation and finding register:
 
 </details>
 
-<details>
-<summary>Phase 5: Security Hub integration and validation</summary>
-
-### Phase 5: centralized security findings
-
-Phase 5 added optional centralized reporting to AWS Security Hub without enabling live IAM remediation.
-
-- Published sanitized ASFF findings for `REMEDIATE` and `SKIP_APPROVED`.
-- Used stable finding IDs derived from CloudTrail event IDs to prevent duplicate Security Hub findings when an event is replayed.
-- Checked `FailedCount` and `FailedFindings` rather than assuming `BatchImportFindings` succeeded.
-- Limited Lambda to `securityhub:BatchImportFindings` on the account's private default product ARN.
-- Kept Security Hub failures visible but non-blocking to the governance decision.
-- Retained `DRY_RUN=true`.
-
-**Validation:** The controlled AWS test created one `HIGH`, `ACTIVE`, `NEW` finding for `iam-test-user`. Replaying the same fixture left the finding count at one. All 37 offline tests passed, Terraform reported no post-deployment drift, and the approved-exception reporting path was covered through unit tests.
-
-[Read the complete Phase 5 implementation and validation record](docs/phase-5-security-hub-integration.md)
-
-**Outcome:** centralized, sanitized finding visibility was added without expanding remediation scope or exposing approval metadata.
-
-</details>
-
-## Phase 5 code and runtime validation
-
-- All 37 unit tests passed using mocked AWS clients.
-- Terraform initialization and validation succeeded.
-- Terraform applied two in-place updates: the Lambda code and its IAM policy, with no resources added or destroyed.
-- Lambda reported `Active`, `Successful`, and `DRY_RUN=true`.
-- Direct Lambda fixture invocations confirmed:
-  - Unsupported events return `NO_ACTION`.
-  - Targets outside `iam-test-*` return `NO_ACTION`.
-  - Self-attachment without an exception returns `REMEDIATE` with a dry-run action.
-  - SNS accepted notifications for all three scenarios.
-- The asynchronous invalid-event invocation returned `202`; DLQ delivery remains unverified because queue inspection was denied.
-- The deployed Phase 5 Lambda published one `HIGH`, `ACTIVE`, `NEW` finding to Security Hub while remediation remained in dry-run mode.
-- Replaying the same event left the Security Hub finding count at one because the finding ID is stable.
-- A post-deployment Terraform plan reported no drift.
-
-These fixture invocations validate deployed Lambda behavior. They do not establish EventBridge delivery or actual IAM detachment. Earlier phase evidence documents the EventBridge path separately.
-
 ## Technologies
 
 Terraform, Python, Boto3, AWS IAM, CloudTrail, EventBridge, Lambda, DynamoDB, SNS, SQS, Security Hub, CloudWatch Logs, S3, KMS, Checkov, Prowler, and GitHub.
@@ -591,7 +570,7 @@ the restored inputs.
 
 [Read the Phase 6 implementation, validation, and evidence](docs/phase-6-controlled-live-remediation.md)
 
-## Phase 7 — CI checks and protected Terraform plan
+## Phase 7: CI checks and protected Terraform plan
 
 GitHub Actions runs Python regression tests and Terraform validation for pull
 requests and pushes to `main`. The manually triggered dev plan runs from
