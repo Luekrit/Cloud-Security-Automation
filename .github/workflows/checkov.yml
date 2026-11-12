@@ -1,0 +1,53 @@
+name: Terraform security scan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checkov:
+    name: Checkov (report only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Checkov
+        run: python -m pip install "checkov==3.3.16"
+
+      - name: Scan Terraform
+        shell: bash
+        run: |
+          report="$RUNNER_TEMP/checkov-terraform.json"
+          checkov -d terraform --framework terraform --soft-fail \
+            --output json > "$report"
+
+          jq -es '
+            length == 1 and
+            (.[0] |
+              .check_type == "terraform" and
+              .summary.parsing_errors == 0 and
+              (.summary.resource_count | type == "number" and . > 0) and
+              (.results.failed_checks | type == "array"))
+          ' "$report" > /dev/null
+
+          {
+            echo "## Checkov Terraform scan"
+            echo
+            jq -r '.summary |
+              "Passed: \(.passed) · Failed: \(.failed) · Skipped: \(.skipped)"' "$report"
+            echo
+            jq -r '.results.failed_checks[] |
+              "- \(.check_id) — \(.resource) (\(.file_path))"' "$report"
+          } >> "$GITHUB_STEP_SUMMARY"
