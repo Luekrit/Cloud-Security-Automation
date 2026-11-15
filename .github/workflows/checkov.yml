@@ -50,4 +50,4 @@ jobs:
             echo
             jq -r '.results.failed_checks[] |
               "- \(.check_id) — \(.resource) (\(.file_path))"' "$report"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
