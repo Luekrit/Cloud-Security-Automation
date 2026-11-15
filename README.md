@@ -580,7 +580,8 @@ requires a separate manual apply of a reviewed plan.
 The Windows and Linux builds initially produced different Lambda ZIP hashes.
 Normalizing the Python source to LF and setting the ZIP entry permissions to
 `0644` made the hashes match. After deploying the matching package, AWS
-confirmed `DRY_RUN=true` and an empty live remediation target. Run #7 proposed no changes for commit 0641df6 against the AWS dev environment at the time of the run.
+confirmed `DRY_RUN=true` and an empty live remediation target. Terraform dev plan #7 ran from `main` at commit `0641df6` and proposed no
+changes to the AWS dev environment.
 
 - [CI validation run #3](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/42647317871)
 - [Terraform dev plan run #7](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/43004069488)
