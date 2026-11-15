@@ -264,7 +264,7 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 
 ## Project evolution: Phases 1–4.5
 
-The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, security validation, and Security Hub ASFF reporting. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. See the [Phase 6 validation record](docs/phase-6-controlled-live-remediation.md) for the controlled live remediation test. Phase 7 results are documented below. Phase 8 remains on the roadmap.
+Phases 1–4.5 established the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, and security validation. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. See the [Phase 6 validation record](docs/phase-6-controlled-live-remediation.md) for the controlled live remediation test. Phase 7 results are documented below. Phase 8 remains on the roadmap.
 
 <details>
 <summary>Build history: Phases 1–3.5</summary>
@@ -580,8 +580,7 @@ requires a separate manual apply of a reviewed plan.
 The Windows and Linux builds initially produced different Lambda ZIP hashes.
 Normalizing the Python source to LF and setting the ZIP entry permissions to
 `0644` made the hashes match. After deploying the matching package, AWS
-confirmed `DRY_RUN=true` and an empty live remediation target. Terraform dev
-plan #7 on `main` at commit `0641df6` completed with no proposed changes.
+confirmed `DRY_RUN=true` and an empty live remediation target. Run #7 proposed no changes for commit 0641df6 against the AWS dev environment at the time of the run.
 
 - [CI validation run #3](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/42647317871)
 - [Terraform dev plan run #7](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/43004069488)
@@ -590,3 +589,5 @@ Checkov scans Terraform in report-only mode on pull requests and pushes to `main
 The [verified CI baseline](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/43701046747)
 was **98 passed, 19 failed, and 0 skipped**. The 19 findings remain open for review
 and do not block merges.
+
+[Read the Phase 7 implementation, validation, and evidence](docs/phase-7-ci-validation.md)
