@@ -245,7 +245,7 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 | 4.5 | Checkov IaC gate and Prowler deployed-posture assessment | **Complete** |
 | 5 | AWS Security Hub integration using ASFF findings | **Complete** |
 | 6 | Controlled live remediation | **Complete (lab validation)** |
-| 7 | CI checks, protected Terraform plan, and automated IaC scanning | CI and plan verified. Automated scanning pending. |
+| 7 | CI checks, protected Terraform plan, and automated IaC scanning | **Complete** |
 | 8 | AI-assisted triage with deterministic enforcement boundaries | Planned |
 
 ## Repository structure
@@ -264,7 +264,7 @@ Removing IAM access can disrupt legitimate operations. The project validates det
 
 ## Project evolution: Phases 1–4.5
 
-The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, security validation, and Security Hub ASFF reporting. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. See the [Phase 6 validation record](docs/phase-6-controlled-live-remediation.md) for the controlled live remediation test. Phase 7 CI and dev plan results are documented below. Automated IaC scanning and Phase 8 remain on the roadmap.
+The completed build history covers the deployment foundation, global IAM detection, execution-role hardening, DynamoDB exception governance, security validation, and Security Hub ASFF reporting. Each phase added a capability or addressed a known risk; the remaining limitations above still apply. See the [Phase 6 validation record](docs/phase-6-controlled-live-remediation.md) for the controlled live remediation test. Phase 7 results are documented below. Phase 8 remains on the roadmap.
 
 <details>
 <summary>Build history: Phases 1–3.5</summary>
@@ -586,4 +586,7 @@ plan #7 on `main` at commit `0641df6` completed with no proposed changes.
 - [CI validation run #3](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/42647317871)
 - [Terraform dev plan run #7](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/43004069488)
 
-Automated IaC scanning in GitHub Actions is pending.
+Checkov scans Terraform in report-only mode on pull requests and pushes to `main`.
+The [verified CI baseline](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/43701046747)
+was **98 passed, 19 failed, and 0 skipped**. The 19 findings remain open for review
+and do not block merges.
