@@ -3,8 +3,9 @@
 ## Outcome
 
 Python regression tests and Terraform dev validation passed in GitHub Actions.
-The protected dev plan completed with no proposed changes. The report-only
-Checkov scan matched the local baseline of 98 passed, 19 failed, and 0 skipped.
+The protected dev plan completed with no proposed changes.
+The report-only Checkov CI scan recorded a baseline of
+98 passed, 19 failed, and 0 skipped.
 
 ## Purpose and Scope
 
@@ -43,9 +44,15 @@ proposed no changes.
 - [CI validation run #3](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/42647317871)
 - [Terraform dev plan run #7](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/43004069488)
 - [Checkov Terraform scan run #5](https://github.com/Luekrit/Cloud-Security-Automation/actions/runs/43701046747)
+- [Checkov risk register](phase-7-checkov-risk-register.md)
 
 ## Limitations and Remaining Work
 
-The 19 Checkov findings remain open for review. In report-only mode, findings
-do not block merges. Terraform dev plan #7 proposed no changes to the AWS dev
-environment when it ran from `main` at commit `0641df6`.
+The 19 Checkov findings remain open, with individual dispositions,
+justifications, and follow-up actions documented in the
+[Checkov risk register](phase-7-checkov-risk-register.md).
+Checkov runs in report-only mode, so findings do not block merges.
+Blocking enforcement remains a proposed follow-up.
+
+Terraform dev plan #7 proposed no changes to the AWS dev environment
+when it ran from `main` at commit `0641df6`.
